@@ -24,7 +24,7 @@ export default function AuthGuard({ children }: { children: ReactNode }) {
       }
 
       if (session && isLogin) {
-        router.replace('/dashboard')
+        router.replace('/')
         return
       }
 

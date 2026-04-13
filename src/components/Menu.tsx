@@ -48,7 +48,7 @@ export default function Menu() {
 
   const links = useMemo(() => {
     const baseLinks = [
-      { href: '/dashboard', label: 'Dashboard' },
+      { href: '/', label: 'Dashboard' },
       { href: '/lancamentos', label: 'Lançamentos' },
       { href: '/produtos', label: 'Produtos' },
       { href: '/transportadoras', label: 'Transportadoras' },
