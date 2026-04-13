@@ -163,10 +163,10 @@ export default function ProdutosPage() {
       .eq('empresa_id', perfil.empresa_id)
 
     if (error) {
-      console.error('Erro ao excluir produto:', error)
-      alert('Erro ao excluir produto.')
-      return
-    }
+  console.error('Erro ao excluir produto:', error)
+  alert(error.message || 'Erro ao excluir produto.')
+  return
+}
 
     alert('Produto excluído com sucesso!')
 
