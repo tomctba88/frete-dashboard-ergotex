@@ -42,10 +42,6 @@ export default function Menu() {
     }
   }
 
-  if (pathname === '/login') {
-    return null
-  }
-
   const links = useMemo(() => {
     const baseLinks = [
       { href: '/', label: 'Dashboard' },
@@ -67,6 +63,10 @@ export default function Menu() {
 
     return baseLinks
   }, [perfil])
+
+  if (pathname === '/login') {
+    return null
+  }
 
   function isActive(href: string) {
     return pathname === href
@@ -95,6 +95,7 @@ export default function Menu() {
           className="hamburger"
           onClick={() => setOpen(true)}
           aria-label="Abrir menu"
+          type="button"
         >
           ☰
         </button>
@@ -109,6 +110,7 @@ export default function Menu() {
             className="close-btn"
             onClick={() => setOpen(false)}
             aria-label="Fechar menu"
+            type="button"
           >
             ✕
           </button>

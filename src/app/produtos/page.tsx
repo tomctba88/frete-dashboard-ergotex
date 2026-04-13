@@ -86,54 +86,56 @@ export default function ProdutosPage() {
   }
 
   async function salvarOuAtualizarProduto() {
-    if (!perfil?.empresa_id) {
-      alert('Empresa do usuário não identificada.')
-      return
-    }
-
-    if (!nome || !largura || !comprimento || !altura) {
-      alert('Preencha nome, largura, comprimento e altura.')
-      return
-    }
-
-    const payload = {
-      nome: nome.trim(),
-      largura: Number(largura.replace(',', '.')),
-      comprimento: Number(comprimento.replace(',', '.')),
-      altura: Number(altura.replace(',', '.')),
-      peso: peso ? Number(peso.replace(',', '.')) : null,
-      empresa_id: perfil.empresa_id
-    }
-
-    if (editandoId) {
-      const { error } = await supabase
-        .from('produtos')
-        .update(payload)
-        .eq('id', editandoId)
-        .eq('empresa_id', perfil.empresa_id)
-
-      if (error) {
-        console.error('Erro ao atualizar produto:', error)
-        alert('Erro ao atualizar produto.')
-        return
-      }
-
-      alert('Produto atualizado com sucesso!')
-    } else {
-      const { error } = await supabase.from('produtos').insert([payload])
-
-      if (error) {
-        console.error('Erro ao salvar produto:', error)
-        alert('Erro ao salvar produto.')
-        return
-      }
-
-      alert('Produto cadastrado com sucesso!')
-    }
-
-    limparFormulario()
-    buscarProdutos()
+  if (!perfil?.empresa_id) {
+    alert('Empresa do usuário não identificada.')
+    return
   }
+
+  if (!nome || !largura || !comprimento || !altura) {
+    alert('Preencha nome, largura, comprimento e altura.')
+    return
+  }
+
+  const payload = {
+    nome: nome.trim(),
+    largura: Number(largura.replace(',', '.')),
+    comprimento: Number(comprimento.replace(',', '.')),
+    altura: Number(altura.replace(',', '.')),
+    peso: peso ? Number(peso.replace(',', '.')) : null,
+    empresa_id: perfil.empresa_id
+  }
+
+  if (editandoId) {
+    const { error } = await supabase
+      .from('produtos')
+      .update(payload)
+      .eq('id', editandoId)
+      .eq('empresa_id', perfil.empresa_id)
+
+    if (error) {
+      console.error('Erro ao atualizar produto:', error)
+      alert(error.message || 'Erro ao atualizar produto.')
+      return
+    }
+
+    alert('Produto atualizado com sucesso!')
+  } else {
+    const { error } = await supabase
+      .from('produtos')
+      .insert([payload])
+
+    if (error) {
+      console.error('Erro ao salvar produto:', error)
+      alert(error.message || 'Erro ao salvar produto.')
+      return
+    }
+
+    alert('Produto cadastrado com sucesso!')
+  }
+
+  limparFormulario()
+  buscarProdutos()
+}
 
   function editarProduto(produto: Produto) {
     setNome(produto.nome)
