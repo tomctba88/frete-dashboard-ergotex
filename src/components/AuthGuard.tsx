@@ -11,39 +11,57 @@ type AuthGuardProps = {
 export default function AuthGuard({ children }: AuthGuardProps) {
   const router = useRouter()
   const pathname = usePathname()
+
   const [checkingAuth, setCheckingAuth] = useState(true)
 
   useEffect(() => {
     let mounted = true
 
-    async function checkAuth() {
+    async function validarSessao() {
+      const isLoginPage = pathname === '/login'
+
       const {
         data: { session }
       } = await supabase.auth.getSession()
 
       if (!mounted) return
 
-      const isLoginPage = pathname === '/login'
-
       if (!session && !isLoginPage) {
         router.replace('/login')
         return
       }
 
       if (session && isLoginPage) {
-        router.replace('/')
+        router.replace('/dashboard')
         return
       }
 
       setCheckingAuth(false)
     }
 
-    checkAuth()
+    validarSessao()
 
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       const isLoginPage = pathname === '/login'
+
+      if (!mounted) return
+
+      if (event === 'INITIAL_SESSION') {
+        if (!session && !isLoginPage) {
+          router.replace('/login')
+          return
+        }
+
+        if (session && isLoginPage) {
+          router.replace('/dashboard')
+          return
+        }
+
+        setCheckingAuth(false)
+        return
+      }
 
       if (!session && !isLoginPage) {
         router.replace('/login')
@@ -51,15 +69,22 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       }
 
       if (session && isLoginPage) {
-        router.replace('/')
+        router.replace('/dashboard')
         return
       }
 
       setCheckingAuth(false)
     })
 
+    const fallback = setTimeout(() => {
+      if (mounted) {
+        setCheckingAuth(false)
+      }
+    }, 2500)
+
     return () => {
       mounted = false
+      clearTimeout(fallback)
       subscription.unsubscribe()
     }
   }, [pathname, router])
