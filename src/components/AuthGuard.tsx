@@ -11,13 +11,12 @@ type AuthGuardProps = {
 export default function AuthGuard({ children }: AuthGuardProps) {
   const router = useRouter()
   const pathname = usePathname()
-
   const [checkingAuth, setCheckingAuth] = useState(true)
 
   useEffect(() => {
     let mounted = true
 
-    async function validarSessao() {
+    async function checkAuth() {
       const isLoginPage = pathname === '/login'
 
       const {
@@ -39,7 +38,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       setCheckingAuth(false)
     }
 
-    validarSessao()
+    checkAuth()
 
     const {
       data: { subscription }
