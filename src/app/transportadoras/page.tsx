@@ -22,7 +22,7 @@ export default function TransportadorasPage() {
   async function buscarTransportadoras() {
   const perfil = await getPerfilAtual()
 
-  if (!perfil) return
+  if (!perfil?.empresa_id) return
 
   const { data, error } = await supabase
     .from('transportadoras')
@@ -32,83 +32,104 @@ export default function TransportadorasPage() {
 
   if (error) {
     console.error('Erro ao buscar transportadoras:', error)
+    alert(error.message || 'Erro ao buscar transportadoras.')
     return
   }
 
   setTransportadoras(data || [])
 }
 
-  async function salvarOuAtualizarTransportadora() {
-    if (!nome) {
-      alert('Preencha o nome da transportadora.')
-      return
-    }
+async function salvarOuAtualizarTransportadora() {
+  const perfil = await getPerfilAtual()
 
-    if (editandoId) {
-      const { error } = await supabase
-        .from('transportadoras')
-        .update({ nome })
-        .eq('id', editandoId)
-
-      if (error) {
-        console.error('Erro ao atualizar transportadora:', error)
-        alert('Erro ao atualizar transportadora.')
-        return
-      }
-
-      alert('Transportadora atualizada com sucesso!')
-    } else {
-      const { error } = await supabase
-        .from('transportadoras')
-        .insert([{ nome }])
-
-      if (error) {
-        console.error('Erro ao salvar transportadora:', error)
-        alert('Erro ao salvar transportadora.')
-        return
-      }
-
-      alert('Transportadora cadastrada com sucesso!')
-    }
-
-    limparFormulario()
-    buscarTransportadoras()
+  if (!perfil?.empresa_id) {
+    alert('Empresa do usuário não identificada.')
+    return
   }
 
-  function editarTransportadora(transportadora: Transportadora) {
-    setNome(transportadora.nome)
-    setEditandoId(transportadora.id)
+  if (!nome.trim()) {
+    alert('Preencha o nome da transportadora.')
+    return
   }
 
-  async function excluirTransportadora(id: number) {
-    const confirmar = confirm('Tem certeza que deseja excluir esta transportadora?')
-
-    if (!confirmar) return
-
+  if (editandoId) {
     const { error } = await supabase
       .from('transportadoras')
-      .delete()
-      .eq('id', id)
+      .update({ nome: nome.trim() })
+      .eq('id', editandoId)
+      .eq('empresa_id', perfil.empresa_id)
 
     if (error) {
-      console.error('Erro ao excluir transportadora:', error)
-      alert('Erro ao excluir transportadora.')
+      console.error('Erro ao atualizar transportadora:', error)
+      alert(error.message || 'Erro ao atualizar transportadora.')
       return
     }
 
-    alert('Transportadora excluída com sucesso!')
+    alert('Transportadora atualizada com sucesso!')
+  } else {
+    const { error } = await supabase
+      .from('transportadoras')
+      .insert([
+        {
+          nome: nome.trim(),
+          empresa_id: perfil.empresa_id
+        }
+      ])
 
-    if (editandoId === id) {
-      limparFormulario()
+    if (error) {
+      console.error('Erro ao salvar transportadora:', error)
+      alert(error.message || 'Erro ao salvar transportadora.')
+      return
     }
 
-    buscarTransportadoras()
+    alert('Transportadora cadastrada com sucesso!')
   }
 
-  function limparFormulario() {
-    setNome('')
-    setEditandoId(null)
+  limparFormulario()
+  buscarTransportadoras()
+}
+function editarTransportadora(transportadora: Transportadora) {
+  setNome(transportadora.nome)
+  setEditandoId(transportadora.id)
+}
+
+async function excluirTransportadora(id: number) {
+  const perfil = await getPerfilAtual()
+
+  if (!perfil?.empresa_id) {
+    alert('Empresa do usuário não identificada.')
+    return
   }
+
+  const confirmar = confirm('Tem certeza que deseja excluir esta transportadora?')
+
+  if (!confirmar) return
+
+  const { error } = await supabase
+    .from('transportadoras')
+    .delete()
+    .eq('id', id)
+    .eq('empresa_id', perfil.empresa_id)
+
+  if (error) {
+    console.error('Erro ao excluir transportadora:', error)
+    alert(error.message || 'Erro ao excluir transportadora.')
+    return
+  }
+
+  alert('Transportadora excluída com sucesso!')
+
+  if (editandoId === id) {
+    limparFormulario()
+  }
+
+  buscarTransportadoras()
+}
+
+function limparFormulario() {
+  setNome('')
+  setEditandoId(null)
+}
 
   const transportadorasFiltradas = transportadoras.filter((transportadora) =>
     transportadora.nome.toLowerCase().includes(busca.toLowerCase())
