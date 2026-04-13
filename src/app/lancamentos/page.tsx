@@ -38,6 +38,7 @@ type Lancamento = {
   produto_id: number
   transportadora_id: number
   cidade_id: number
+  prazo_entrega: number | null
 }
 
 export default function LancamentosPage() {
@@ -47,6 +48,7 @@ export default function LancamentosPage() {
   const [cidadeId, setCidadeId] = useState('')
   const [quantidade, setQuantidade] = useState('')
   const [valorFrete, setValorFrete] = useState('')
+  const [prazoEntrega, setPrazoEntrega] = useState('')
   const [editandoId, setEditandoId] = useState<number | null>(null)
 
   const [buscaProduto, setBuscaProduto] = useState('')
@@ -95,42 +97,44 @@ export default function LancamentosPage() {
   }, [estadoId, cidades, cidadeId])
 
   async function buscarProdutos() {
-  const perfil = await getPerfilAtual()
+    const perfil = await getPerfilAtual()
 
-  if (!perfil) return
+    if (!perfil?.empresa_id) return
 
-  const { data, error } = await supabase
-    .from('produtos')
-    .select('*')
-    .eq('empresa_id', perfil.empresa_id)
-    .order('nome', { ascending: true })
+    const { data, error } = await supabase
+      .from('produtos')
+      .select('*')
+      .eq('empresa_id', perfil.empresa_id)
+      .order('nome', { ascending: true })
 
-  if (error) {
-    console.error('Erro ao buscar produtos:', error)
-    return
+    if (error) {
+      console.error('Erro ao buscar produtos:', error)
+      alert(error.message || 'Erro ao buscar produtos.')
+      return
+    }
+
+    setProdutos(data || [])
   }
-
-  setProdutos(data || [])
-}
 
   async function buscarTransportadoras() {
-  const perfil = await getPerfilAtual()
+    const perfil = await getPerfilAtual()
 
-  if (!perfil) return
+    if (!perfil?.empresa_id) return
 
-  const { data, error } = await supabase
-    .from('transportadoras')
-    .select('*')
-    .eq('empresa_id', perfil.empresa_id)
-    .order('nome', { ascending: true })
+    const { data, error } = await supabase
+      .from('transportadoras')
+      .select('*')
+      .eq('empresa_id', perfil.empresa_id)
+      .order('nome', { ascending: true })
 
-  if (error) {
-    console.error('Erro ao buscar transportadoras:', error)
-    return
+    if (error) {
+      console.error('Erro ao buscar transportadoras:', error)
+      alert(error.message || 'Erro ao buscar transportadoras.')
+      return
+    }
+
+    setTransportadoras(data || [])
   }
-
-  setTransportadoras(data || [])
-}
 
   async function buscarEstados() {
     const { data, error } = await supabase
@@ -140,6 +144,7 @@ export default function LancamentosPage() {
 
     if (error) {
       console.error('Erro ao buscar estados:', error)
+      alert(error.message || 'Erro ao buscar estados.')
       return
     }
 
@@ -154,6 +159,7 @@ export default function LancamentosPage() {
 
     if (error) {
       console.error('Erro ao buscar cidades:', error)
+      alert(error.message || 'Erro ao buscar cidades.')
       return
     }
 
@@ -161,23 +167,24 @@ export default function LancamentosPage() {
   }
 
   async function buscarLancamentos() {
-  const perfil = await getPerfilAtual()
+    const perfil = await getPerfilAtual()
 
-  if (!perfil) return
+    if (!perfil?.empresa_id) return
 
-  const { data, error } = await supabase
-    .from('lancamentos_frete')
-    .select('*')
-    .eq('empresa_id', perfil.empresa_id)
-    .order('id', { ascending: false })
+    const { data, error } = await supabase
+      .from('lancamentos_frete')
+      .select('*')
+      .eq('empresa_id', perfil.empresa_id)
+      .order('id', { ascending: false })
 
-  if (error) {
-    console.error('Erro ao buscar lançamentos:', error)
-    return
+    if (error) {
+      console.error('Erro ao buscar lançamentos:', error)
+      alert(error.message || 'Erro ao buscar lançamentos.')
+      return
+    }
+
+    setLancamentos(data || [])
   }
-
-  setLancamentos(data || [])
-}
 
   async function salvarOuAtualizarLancamento() {
     if (
@@ -188,7 +195,14 @@ export default function LancamentosPage() {
       !quantidade ||
       !valorFrete
     ) {
-      alert('Preencha todos os campos.')
+      alert('Preencha todos os campos obrigatórios.')
+      return
+    }
+
+    const perfil = await getPerfilAtual()
+
+    if (!perfil?.empresa_id) {
+      alert('Usuário não identificado.')
       return
     }
 
@@ -197,41 +211,37 @@ export default function LancamentosPage() {
       transportadora_id: Number(transportadoraId),
       cidade_id: Number(cidadeId),
       quantidade: Number(quantidade),
-      valor_frete: Number(valorFrete.replace(',', '.'))
+      valor_frete: Number(valorFrete.replace(',', '.')),
+      prazo_entrega: prazoEntrega ? Number(prazoEntrega) : null
     }
-    const perfil = await getPerfilAtual()
-
-if (!perfil) {
-  alert('Usuário não identificado.')
-  return
-}
 
     if (editandoId) {
       const { error } = await supabase
         .from('lancamentos_frete')
         .update(payload)
         .eq('id', editandoId)
+        .eq('empresa_id', perfil.empresa_id)
 
       if (error) {
         console.error('Erro ao atualizar lançamento:', error)
-        alert('Erro ao atualizar lançamento.')
+        alert(error.message || 'Erro ao atualizar lançamento.')
         return
       }
 
       alert('Lançamento atualizado com sucesso!')
     } else {
       const { error } = await supabase
-  .from('lancamentos_frete')
-  .insert([
-    {
-      ...payload,
-      empresa_id: perfil.empresa_id
-    }
-  ])
+        .from('lancamentos_frete')
+        .insert([
+          {
+            ...payload,
+            empresa_id: perfil.empresa_id
+          }
+        ])
 
       if (error) {
         console.error('Erro ao salvar lançamento:', error)
-        alert('Erro ao salvar lançamento.')
+        alert(error.message || 'Erro ao salvar lançamento.')
         return
       }
 
@@ -249,6 +259,9 @@ if (!perfil) {
     setCidadeId(String(lancamento.cidade_id))
     setQuantidade(String(lancamento.quantidade))
     setValorFrete(String(lancamento.valor_frete))
+    setPrazoEntrega(
+      lancamento.prazo_entrega != null ? String(lancamento.prazo_entrega) : ''
+    )
 
     const cidade = cidades.find((c) => c.id === lancamento.cidade_id)
     if (cidade) {
@@ -261,6 +274,13 @@ if (!perfil) {
   }
 
   async function excluirLancamento(id: number) {
+    const perfil = await getPerfilAtual()
+
+    if (!perfil?.empresa_id) {
+      alert('Usuário não identificado.')
+      return
+    }
+
     const confirmar = confirm('Tem certeza que deseja excluir este lançamento?')
     if (!confirmar) return
 
@@ -268,10 +288,11 @@ if (!perfil) {
       .from('lancamentos_frete')
       .delete()
       .eq('id', id)
+      .eq('empresa_id', perfil.empresa_id)
 
     if (error) {
       console.error('Erro ao excluir lançamento:', error)
-      alert('Erro ao excluir lançamento.')
+      alert(error.message || 'Erro ao excluir lançamento.')
       return
     }
 
@@ -291,6 +312,7 @@ if (!perfil) {
     setCidadeId('')
     setQuantidade('')
     setValorFrete('')
+    setPrazoEntrega('')
     setBuscaProduto('')
     setBuscaTransportadora('')
     setBuscaCidade('')
@@ -704,6 +726,14 @@ if (!perfil) {
               onChange={(e) => setValorFrete(e.target.value)}
               style={inputStyle}
             />
+
+            <input
+              type="number"
+              placeholder="Prazo de entrega (dias)"
+              value={prazoEntrega}
+              onChange={(e) => setPrazoEntrega(e.target.value)}
+              style={inputStyle}
+            />
           </div>
 
           {produtoSelecionado && (
@@ -916,7 +946,7 @@ if (!perfil) {
               WebkitOverflowScrolling: 'touch'
             }}
           >
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1100px' }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1200px' }}>
               <thead>
                 <tr>
                   <th style={th}>Data</th>
@@ -927,6 +957,7 @@ if (!perfil) {
                   <th style={th}>Cubagem Total</th>
                   <th style={th}>Peso Total</th>
                   <th style={th}>Valor do Frete</th>
+                  <th style={th}>Prazo de Entrega</th>
                   <th style={th}>Ações</th>
                 </tr>
               </thead>
@@ -958,6 +989,11 @@ if (!perfil) {
                       <td style={td}>{formatarNumero(pesoItem, 2)} kg</td>
                       <td style={td}>{formatarMoeda(lancamento.valor_frete)}</td>
                       <td style={td}>
+                        {lancamento.prazo_entrega != null
+                          ? `${lancamento.prazo_entrega} dia(s)`
+                          : '-'}
+                      </td>
+                      <td style={td}>
                         <button
                           onClick={() => editarLancamento(lancamento)}
                           style={editButtonStyle}
@@ -974,6 +1010,14 @@ if (!perfil) {
                     </tr>
                   )
                 })}
+
+                {lancamentosFiltrados.length === 0 && (
+                  <tr>
+                    <td style={td} colSpan={10}>
+                      Nenhum lançamento encontrado.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

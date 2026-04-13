@@ -32,8 +32,47 @@ type Resultado = {
   frete_medio: number
 }
 
+type Produto = {
+  id: number
+  nome: string
+}
+
+type Transportadora = {
+  id: number
+  nome: string
+}
+
+type Cidade = {
+  id: number
+  nome: string
+  estado_id: number
+}
+
+type Estado = {
+  id: number
+  nome: string
+  uf: string
+}
+
+type LancamentoFrete = {
+  id: number
+  data: string
+  produto_id: number
+  transportadora_id: number
+  cidade_id: number
+  quantidade: number
+  valor_frete: number
+  prazo_entrega: number | null
+}
+
 export default function ResultadosPage() {
   const [resultados, setResultados] = useState<Resultado[]>([])
+  const [lancamentosRaw, setLancamentosRaw] = useState<LancamentoFrete[]>([])
+  const [produtosRef, setProdutosRef] = useState<Produto[]>([])
+  const [transportadorasRef, setTransportadorasRef] = useState<Transportadora[]>([])
+  const [cidadesRef, setCidadesRef] = useState<Cidade[]>([])
+  const [estadosRef, setEstadosRef] = useState<Estado[]>([])
+
   const [busca, setBusca] = useState('')
   const [filtroProduto, setFiltroProduto] = useState('')
   const [filtroTransportadora, setFiltroTransportadora] = useState('')
@@ -52,22 +91,61 @@ export default function ResultadosPage() {
     try {
       setLoading(true)
 
-      const { data, error } = await supabase.rpc(
-        'resultado_frete_por_produto_estado',
-        {
+      const [
+        resultadosResponse,
+        lancamentosResponse,
+        produtosResponse,
+        transportadorasResponse,
+        cidadesResponse,
+        estadosResponse
+      ] = await Promise.all([
+        supabase.rpc('resultado_frete_por_produto_estado', {
           filtro_mes: filtroMes ? Number(filtroMes) : null,
           filtro_ano: filtroAno ? Number(filtroAno) : null,
           filtro_data_inicial: dataInicial || null,
           filtro_data_final: dataFinal || null
-        }
-      )
+        }),
+        supabase
+          .from('lancamentos_frete')
+          .select('id, data, produto_id, transportadora_id, cidade_id, quantidade, valor_frete, prazo_entrega')
+          .order('id', { ascending: false }),
+        supabase.from('produtos').select('id, nome'),
+        supabase.from('transportadoras').select('id, nome'),
+        supabase.from('cidades').select('id, nome, estado_id'),
+        supabase.from('estados').select('id, nome, uf')
+      ])
 
-      if (error) {
-        console.error('Erro ao buscar resultados:', error)
+      if (resultadosResponse.error) {
+        console.error('Erro ao buscar resultados:', resultadosResponse.error)
         return
       }
 
-      setResultados(data || [])
+      if (lancamentosResponse.error) {
+        console.error('Erro ao buscar lançamentos para prazo:', lancamentosResponse.error)
+      }
+
+      if (produtosResponse.error) {
+        console.error('Erro ao buscar produtos de referência:', produtosResponse.error)
+      }
+
+      if (transportadorasResponse.error) {
+        console.error('Erro ao buscar transportadoras de referência:', transportadorasResponse.error)
+      }
+
+      if (cidadesResponse.error) {
+        console.error('Erro ao buscar cidades de referência:', cidadesResponse.error)
+      }
+
+      if (estadosResponse.error) {
+        console.error('Erro ao buscar estados de referência:', estadosResponse.error)
+      }
+
+      setResultados(resultadosResponse.data || [])
+      setLancamentosRaw(lancamentosResponse.data || [])
+      setProdutosRef(produtosResponse.data || [])
+      setTransportadorasRef(transportadorasResponse.data || [])
+      setCidadesRef(cidadesResponse.data || [])
+      setEstadosRef(estadosResponse.data || [])
     } finally {
       setLoading(false)
     }
@@ -87,6 +165,24 @@ export default function ResultadosPage() {
     })
   }
 
+  function formatarDataIso(data: string) {
+    return data.slice(0, 10)
+  }
+
+  function getProdutoNomeById(id: number) {
+    return produtosRef.find((item) => item.id === id)?.nome || ''
+  }
+
+  function getTransportadoraNomeById(id: number) {
+    return transportadorasRef.find((item) => item.id === id)?.nome || ''
+  }
+
+  function getEstadoByCidadeId(cidadeId: number) {
+    const cidade = cidadesRef.find((item) => item.id === cidadeId)
+    if (!cidade) return null
+    return estadosRef.find((item) => item.id === cidade.estado_id) || null
+  }
+
   function exportarExcel() {
     if (!resultadosFiltrados.length) {
       alert('Nenhum dado para exportar.')
@@ -104,7 +200,8 @@ export default function ResultadosPage() {
       'Cubagem Total Média (m³)': Number(item.cubagem_total_media),
       'Peso Unitário (kg)': Number(item.peso_unitario),
       'Peso Total Médio (kg)': Number(item.peso_total_medio),
-      'Frete Médio (R$)': Number(item.frete_medio)
+      'Frete Médio (R$)': Number(item.frete_medio),
+      'Prazo Médio (dias)': Number(buscarPrazoMedioResultado(item).toFixed(2))
     }))
 
     const worksheet = XLSX.utils.json_to_sheet(dados)
@@ -169,6 +266,100 @@ export default function ResultadosPage() {
     })
   }, [resultados, busca, filtroProduto, filtroTransportadora, filtroEstado])
 
+  const lancamentosFiltradosPrazo = useMemo(() => {
+    return lancamentosRaw.filter((item) => {
+      const produtoNome = getProdutoNomeById(item.produto_id)
+      const transportadoraNome = getTransportadoraNomeById(item.transportadora_id)
+      const estadoData = getEstadoByCidadeId(item.cidade_id)
+      const estadoNome = estadoData?.nome || ''
+      const uf = estadoData?.uf || ''
+      const dataLancamento = formatarDataIso(item.data)
+
+      const texto = busca.toLowerCase()
+      const passouBusca =
+        !busca ||
+        produtoNome.toLowerCase().includes(texto) ||
+        transportadoraNome.toLowerCase().includes(texto) ||
+        estadoNome.toLowerCase().includes(texto) ||
+        uf.toLowerCase().includes(texto)
+
+      const passouProduto = filtroProduto ? produtoNome === filtroProduto : true
+      const passouTransportadora = filtroTransportadora
+        ? transportadoraNome === filtroTransportadora
+        : true
+      const passouEstado = filtroEstado ? estadoNome === filtroEstado : true
+
+      const passouDataInicial = dataInicial ? dataLancamento >= dataInicial : true
+      const passouDataFinal = dataFinal ? dataLancamento <= dataFinal : true
+
+      const dataObj = new Date(item.data)
+      const mesLancamento = String(dataObj.getMonth() + 1)
+      const anoLancamento = String(dataObj.getFullYear())
+
+      const passouMes = filtroMes ? mesLancamento === filtroMes : true
+      const passouAno = filtroAno ? anoLancamento === filtroAno : true
+
+      return (
+        passouBusca &&
+        passouProduto &&
+        passouTransportadora &&
+        passouEstado &&
+        passouDataInicial &&
+        passouDataFinal &&
+        passouMes &&
+        passouAno
+      )
+    })
+  }, [
+    lancamentosRaw,
+    busca,
+    filtroProduto,
+    filtroTransportadora,
+    filtroEstado,
+    filtroMes,
+    filtroAno,
+    dataInicial,
+    dataFinal,
+    produtosRef,
+    transportadorasRef,
+    cidadesRef,
+    estadosRef
+  ])
+
+  function buscarPrazoMedioResultado(item: Resultado) {
+    const itensRelacionados = lancamentosFiltradosPrazo.filter((lancamento) => {
+      const produtoNome = getProdutoNomeById(lancamento.produto_id)
+      const transportadoraNome = getTransportadoraNomeById(lancamento.transportadora_id)
+      const estadoData = getEstadoByCidadeId(lancamento.cidade_id)
+      const estadoNome = estadoData?.nome || ''
+      const uf = estadoData?.uf || ''
+
+      return (
+        produtoNome === item.produto &&
+        transportadoraNome === item.transportadora &&
+        (estadoNome === item.estado || uf === item.uf)
+      )
+    })
+
+    const validos = itensRelacionados.filter((itemLancamento) => itemLancamento.prazo_entrega != null)
+
+    if (!validos.length) return 0
+
+    const total = validos.reduce(
+      (acc, itemLancamento) => acc + Number(itemLancamento.prazo_entrega || 0),
+      0
+    )
+
+    return total / validos.length
+  }
+
+  const resultadosComPrazo = useMemo(() => {
+    return resultadosFiltrados.map((item) => ({
+      ...item,
+      prazo_medio: buscarPrazoMedioResultado(item)
+    }))
+  }, [resultadosFiltrados, lancamentosFiltradosPrazo])
+
   const totalLancamentos = useMemo(() => {
     return resultadosFiltrados.reduce(
       (total, item) => total + Number(item.qtd_lancamentos || 0),
@@ -205,6 +396,19 @@ export default function ResultadosPage() {
       ) / resultadosFiltrados.length
     )
   }, [resultadosFiltrados])
+
+  const prazoMedioGeral = useMemo(() => {
+    const itensComPrazo = lancamentosFiltradosPrazo.filter((item) => item.prazo_entrega != null)
+
+    if (!itensComPrazo.length) return 0
+
+    const total = itensComPrazo.reduce(
+      (acc, item) => acc + Number(item.prazo_entrega || 0),
+      0
+    )
+
+    return total / itensComPrazo.length
+  }, [lancamentosFiltradosPrazo])
 
   const custoMedioPorKg = useMemo(() => {
     if (!resultadosFiltrados.length) return 0
@@ -244,11 +448,13 @@ export default function ResultadosPage() {
         freteTotal: number
         pesoTotal: number
         cubagemTotal: number
+        prazoTotal: number
         registros: number
+        registrosPrazo: number
       }
     >()
 
-    resultadosFiltrados.forEach((item) => {
+    resultadosComPrazo.forEach((item) => {
       const chave = item.transportadora || 'Não informada'
       const atual = mapa.get(chave)
 
@@ -256,14 +462,18 @@ export default function ResultadosPage() {
         atual.freteTotal += Number(item.frete_medio || 0)
         atual.pesoTotal += Number(item.peso_total_medio || 0)
         atual.cubagemTotal += Number(item.cubagem_total_media || 0)
+        atual.prazoTotal += Number(item.prazo_medio || 0)
         atual.registros += 1
+        if (item.prazo_medio > 0) atual.registrosPrazo += 1
       } else {
         mapa.set(chave, {
           transportadora: chave,
           freteTotal: Number(item.frete_medio || 0),
           pesoTotal: Number(item.peso_total_medio || 0),
           cubagemTotal: Number(item.cubagem_total_media || 0),
-          registros: 1
+          prazoTotal: Number(item.prazo_medio || 0),
+          registros: 1,
+          registrosPrazo: item.prazo_medio > 0 ? 1 : 0
         })
       }
     })
@@ -273,17 +483,25 @@ export default function ResultadosPage() {
         const freteMedio = item.registros > 0 ? item.freteTotal / item.registros : 0
         const custoKg = item.pesoTotal > 0 ? item.freteTotal / item.pesoTotal : 0
         const custoM3 = item.cubagemTotal > 0 ? item.freteTotal / item.cubagemTotal : 0
+        const prazoMedio = item.registrosPrazo > 0 ? item.prazoTotal / item.registrosPrazo : 0
+        const score =
+          custoKg * 0.35 +
+          custoM3 * 0.20 +
+          freteMedio * 0.25 +
+          prazoMedio * 0.20
 
         return {
           transportadora: item.transportadora,
           freteMedio: Number(freteMedio.toFixed(2)),
           custoKg: Number(custoKg.toFixed(4)),
           custoM3: Number(custoM3.toFixed(4)),
+          prazoMedio: Number(prazoMedio.toFixed(2)),
+          score: Number(score.toFixed(2)),
           registros: item.registros
         }
       })
-      .sort((a, b) => a.freteMedio - b.freteMedio)
-  }, [resultadosFiltrados])
+      .sort((a, b) => a.score - b.score)
+  }, [resultadosComPrazo])
 
   const melhorTransportadora = rankingTransportadoras[0] || null
   const piorTransportadora =
@@ -324,7 +542,8 @@ export default function ResultadosPage() {
       .map((item) => ({
         transportadora: item.transportadora,
         freteMedio: item.freteMedio,
-        custoKg: item.custoKg
+        custoKg: item.custoKg,
+        prazoMedio: item.prazoMedio
       }))
   }, [rankingTransportadoras])
 
@@ -347,6 +566,15 @@ export default function ResultadosPage() {
       .slice(0, 6)
   }, [resultadosFiltrados])
 
+  const graficoPrazoTransportadora = useMemo(() => {
+    return rankingTransportadoras
+      .slice(0, 8)
+      .map((item) => ({
+        transportadora: item.transportadora,
+        prazoMedio: item.prazoMedio
+      }))
+  }, [rankingTransportadoras])
+
   const alertas = useMemo(() => {
     const lista: string[] = []
 
@@ -363,10 +591,14 @@ export default function ResultadosPage() {
       lista.push('O custo médio por m³ está alto nesta visão filtrada.')
     }
 
+    if (prazoMedioGeral > 0 && prazoMedioGeral > 7) {
+      lista.push('O prazo médio de entrega está elevado nesta visão filtrada.')
+    }
+
     if (melhorTransportadora && piorTransportadora) {
       const dif =
-        melhorTransportadora.freteMedio > 0
-          ? piorTransportadora.freteMedio / melhorTransportadora.freteMedio
+        melhorTransportadora.score > 0
+          ? piorTransportadora.score / melhorTransportadora.score
           : 0
 
       if (dif > 1.35) {
@@ -381,6 +613,7 @@ export default function ResultadosPage() {
     resultadosFiltrados,
     custoMedioPorKg,
     custoMedioPorM3,
+    prazoMedioGeral,
     melhorTransportadora,
     piorTransportadora
   ])
@@ -525,6 +758,11 @@ export default function ResultadosPage() {
           <div style={{ ...kpiCardStyle, background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)' }}>
             <div style={kpiTitleStyle}>Custo médio por m³</div>
             <div style={kpiValueStyle}>{formatarMoeda(custoMedioPorM3)}</div>
+          </div>
+
+          <div style={{ ...kpiCardStyle, background: 'linear-gradient(135deg, #ecfeff 0%, #cffafe 100%)' }}>
+            <div style={kpiTitleStyle}>Prazo médio de entrega</div>
+            <div style={kpiValueStyle}>{formatarNumero(prazoMedioGeral, 1)} dias</div>
           </div>
         </div>
 
@@ -695,10 +933,18 @@ export default function ResultadosPage() {
                     height={70}
                   />
                   <YAxis />
-                  <Tooltip formatter={(value) => formatarMoeda(Number(value || 0))} />
+                  <Tooltip
+                    formatter={(value, name) => {
+                      if (name === 'Frete Médio' || name === 'Custo/Kg') {
+                        return formatarMoeda(Number(value || 0))
+                      }
+                      return `${formatarNumero(Number(value || 0), 1)} dias`
+                    }}
+                  />
                   <Legend />
                   <Bar dataKey='freteMedio' name='Frete Médio' fill='#2563eb' radius={[8, 8, 0, 0]} />
                   <Bar dataKey='custoKg' name='Custo/Kg' fill='#16a34a' radius={[8, 8, 0, 0]} />
+                  <Bar dataKey='prazoMedio' name='Prazo Médio' fill='#0891b2' radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -741,38 +987,70 @@ export default function ResultadosPage() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gridTemplateColumns: 'minmax(0, 1.3fr) minmax(320px, 1fr)',
             gap: '16px',
             marginBottom: '20px'
           }}
         >
           <div style={cardStyle}>
-            <div style={kpiTitleStyle}>Melhor transportadora</div>
-            <div style={{ ...kpiValueStyle, fontSize: '22px' }}>
-              {melhorTransportadora?.transportadora || '-'}
+            <div style={chartTitleStyle}>Prazo médio por transportadora</div>
+            <div style={chartSubtitleStyle}>
+              Comparativo dos prazos médios dentro da visão filtrada.
             </div>
-            <div style={kpiHintStyle}>
-              Frete médio: {formatarMoeda(melhorTransportadora?.freteMedio || 0)}
+            <div style={{ width: '100%', height: 340 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={graficoPrazoTransportadora}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis
+                    dataKey='transportadora'
+                    interval={0}
+                    angle={-12}
+                    textAnchor='end'
+                    height={70}
+                  />
+                  <YAxis />
+                  <Tooltip formatter={(value) => `${formatarNumero(Number(value || 0), 1)} dias`} />
+                  <Bar dataKey='prazoMedio' name='Prazo Médio' fill='#7c3aed' radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
-          <div style={cardStyle}>
-            <div style={kpiTitleStyle}>Pior transportadora</div>
-            <div style={{ ...kpiValueStyle, fontSize: '22px' }}>
-              {piorTransportadora?.transportadora || '-'}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr',
+              gap: '16px'
+            }}
+          >
+            <div style={cardStyle}>
+              <div style={kpiTitleStyle}>Melhor transportadora</div>
+              <div style={{ ...kpiValueStyle, fontSize: '22px' }}>
+                {melhorTransportadora?.transportadora || '-'}
+              </div>
+              <div style={kpiHintStyle}>
+                Score: {formatarNumero(melhorTransportadora?.score || 0, 2)} | Prazo: {formatarNumero(melhorTransportadora?.prazoMedio || 0, 1)} dias
+              </div>
             </div>
-            <div style={kpiHintStyle}>
-              Frete médio: {formatarMoeda(piorTransportadora?.freteMedio || 0)}
-            </div>
-          </div>
 
-          <div style={cardStyle}>
-            <div style={kpiTitleStyle}>Estado mais caro</div>
-            <div style={{ ...kpiValueStyle, fontSize: '22px' }}>
-              {estadoMaisCaro?.estado || '-'}
+            <div style={cardStyle}>
+              <div style={kpiTitleStyle}>Pior transportadora</div>
+              <div style={{ ...kpiValueStyle, fontSize: '22px' }}>
+                {piorTransportadora?.transportadora || '-'}
+              </div>
+              <div style={kpiHintStyle}>
+                Score: {formatarNumero(piorTransportadora?.score || 0, 2)} | Prazo: {formatarNumero(piorTransportadora?.prazoMedio || 0, 1)} dias
+              </div>
             </div>
-            <div style={kpiHintStyle}>
-              Frete médio: {formatarMoeda(estadoMaisCaro?.freteMedio || 0)}
+
+            <div style={cardStyle}>
+              <div style={kpiTitleStyle}>Estado mais caro</div>
+              <div style={{ ...kpiValueStyle, fontSize: '22px' }}>
+                {estadoMaisCaro?.estado || '-'}
+              </div>
+              <div style={kpiHintStyle}>
+                Frete médio: {formatarMoeda(estadoMaisCaro?.freteMedio || 0)}
+              </div>
             </div>
           </div>
         </div>
@@ -784,7 +1062,7 @@ export default function ResultadosPage() {
               WebkitOverflowScrolling: 'touch'
             }}
           >
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1400px' }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1500px' }}>
               <thead>
                 <tr>
                   <th style={th}>Produto</th>
@@ -798,10 +1076,11 @@ export default function ResultadosPage() {
                   <th style={th}>Peso Unitário</th>
                   <th style={th}>Peso Total Médio</th>
                   <th style={th}>Frete Médio</th>
+                  <th style={th}>Prazo Médio</th>
                 </tr>
               </thead>
               <tbody>
-                {resultadosFiltrados.map((item, index) => (
+                {resultadosComPrazo.map((item, index) => (
                   <tr key={index}>
                     <td style={td}>{item.produto}</td>
                     <td style={td}>{item.transportadora}</td>
@@ -814,6 +1093,11 @@ export default function ResultadosPage() {
                     <td style={td}>{formatarNumero(item.peso_unitario, 2)} kg</td>
                     <td style={td}>{formatarNumero(item.peso_total_medio, 2)} kg</td>
                     <td style={td}>{formatarMoeda(item.frete_medio)}</td>
+                    <td style={td}>
+                      {item.prazo_medio > 0
+                        ? `${formatarNumero(item.prazo_medio, 1)} dias`
+                        : '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -32,6 +32,39 @@ type Resultado = {
   frete_medio: number
 }
 
+type Produto = {
+  id: number
+  nome: string
+}
+
+type Transportadora = {
+  id: number
+  nome: string
+}
+
+type Cidade = {
+  id: number
+  nome: string
+  estado_id: number
+}
+
+type Estado = {
+  id: number
+  nome: string
+  uf: string
+}
+
+type LancamentoFrete = {
+  id: number
+  data: string
+  produto_id: number
+  transportadora_id: number
+  cidade_id: number
+  quantidade: number
+  valor_frete: number
+  prazo_entrega: number | null
+}
+
 type Filtros = {
   dataInicial: string
   dataFinal: string
@@ -47,7 +80,9 @@ type RankingTransportadora = {
   freteMedio: number
   custoKg: number
   custoM3: number
+  prazoMedio: number
   score: number
+  scoreFormatado: number
   registros: number
   pesoTotal: number
   cubagemTotal: number
@@ -65,6 +100,11 @@ const filtrosIniciais: Filtros = {
 
 export default function DashboardPage() {
   const [resultados, setResultados] = useState<Resultado[]>([])
+  const [lancamentosRaw, setLancamentosRaw] = useState<LancamentoFrete[]>([])
+  const [produtos, setProdutos] = useState<Produto[]>([])
+  const [transportadoras, setTransportadoras] = useState<Transportadora[]>([])
+  const [cidades, setCidades] = useState<Cidade[]>([])
+  const [estados, setEstados] = useState<Estado[]>([])
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState('')
   const [filtros, setFiltros] = useState<Filtros>(filtrosIniciais)
@@ -78,23 +118,64 @@ export default function DashboardPage() {
       setLoading(true)
       setErro('')
 
-      const { data, error } = await supabase.rpc(
-        'resultado_frete_por_produto_estado',
-        {
+      const [
+        rpcResponse,
+        lancamentosResponse,
+        produtosResponse,
+        transportadorasResponse,
+        cidadesResponse,
+        estadosResponse
+      ] = await Promise.all([
+        supabase.rpc('resultado_frete_por_produto_estado', {
           filtro_mes: filtros.mes ? Number(filtros.mes) : null,
           filtro_ano: filtros.ano ? Number(filtros.ano) : null,
           filtro_data_inicial: filtros.dataInicial || null,
           filtro_data_final: filtros.dataFinal || null
-        }
-      )
+        }),
+        supabase
+          .from('lancamentos_frete')
+          .select('id, data, produto_id, transportadora_id, cidade_id, quantidade, valor_frete, prazo_entrega')
+          .order('id', { ascending: false }),
+        supabase.from('produtos').select('id, nome'),
+        supabase.from('transportadoras').select('id, nome'),
+        supabase.from('cidades').select('id, nome, estado_id'),
+        supabase.from('estados').select('id, nome, uf')
+      ])
 
-      if (error) {
-        console.error('Erro ao buscar dashboard:', error)
-        setErro('Não foi possível carregar os dados do dashboard.')
+      if (rpcResponse.error) {
+        console.error('Erro ao buscar dashboard:', rpcResponse.error)
+        setErro('Não foi possível carregar os dados consolidados do dashboard.')
         return
       }
 
-      setResultados(data || [])
+      if (lancamentosResponse.error) {
+        console.error('Erro ao buscar lançamentos do dashboard:', lancamentosResponse.error)
+        setErro('Não foi possível carregar os lançamentos do dashboard.')
+        return
+      }
+
+      if (produtosResponse.error) {
+        console.error('Erro ao buscar produtos do dashboard:', produtosResponse.error)
+      }
+
+      if (transportadorasResponse.error) {
+        console.error('Erro ao buscar transportadoras do dashboard:', transportadorasResponse.error)
+      }
+
+      if (cidadesResponse.error) {
+        console.error('Erro ao buscar cidades do dashboard:', cidadesResponse.error)
+      }
+
+      if (estadosResponse.error) {
+        console.error('Erro ao buscar estados do dashboard:', estadosResponse.error)
+      }
+
+      setResultados(rpcResponse.data || [])
+      setLancamentosRaw(lancamentosResponse.data || [])
+      setProdutos(produtosResponse.data || [])
+      setTransportadoras(transportadorasResponse.data || [])
+      setCidades(cidadesResponse.data || [])
+      setEstados(estadosResponse.data || [])
     } catch (error) {
       console.error('Erro ao buscar dashboard:', error)
       setErro('Ocorreu um erro inesperado ao carregar o dashboard.')
@@ -126,6 +207,30 @@ export default function DashboardPage() {
       minimumFractionDigits: casas,
       maximumFractionDigits: casas
     })
+  }
+
+  function formatarDataIso(data: string) {
+    return data.slice(0, 10)
+  }
+
+  function getProdutoNomeById(id: number) {
+    return produtos.find((item) => item.id === id)?.nome || ''
+  }
+
+  function getTransportadoraNomeById(id: number) {
+    return transportadoras.find((item) => item.id === id)?.nome || ''
+  }
+
+  function getUfByCidadeId(cidadeId: number) {
+    const cidade = cidades.find((item) => item.id === cidadeId)
+    if (!cidade) return ''
+    return estados.find((item) => item.id === cidade.estado_id)?.uf || ''
+  }
+
+  function getEstadoNomeByCidadeId(cidadeId: number) {
+    const cidade = cidades.find((item) => item.id === cidadeId)
+    if (!cidade) return ''
+    return estados.find((item) => item.id === cidade.estado_id)?.nome || ''
   }
 
   const opcoesTransportadora = useMemo(() => {
@@ -173,6 +278,49 @@ export default function DashboardPage() {
       return matchTransportadora && matchEstado && matchProduto
     })
   }, [resultados, filtros.transportadora, filtros.estado, filtros.produto])
+
+  const lancamentosFiltradosPrazo = useMemo(() => {
+    return lancamentosRaw.filter((item) => {
+      const nomeProduto = getProdutoNomeById(item.produto_id)
+      const nomeTransportadora = getTransportadoraNomeById(item.transportadora_id)
+      const uf = getUfByCidadeId(item.cidade_id)
+      const estadoNome = getEstadoNomeByCidadeId(item.cidade_id)
+      const dataLancamento = formatarDataIso(item.data)
+
+      const matchProduto =
+        !filtros.produto || nomeProduto === filtros.produto
+
+      const matchTransportadora =
+        !filtros.transportadora || nomeTransportadora === filtros.transportadora
+
+      const ufOuEstado = uf || estadoNome || ''
+      const matchEstado =
+        !filtros.estado || ufOuEstado === filtros.estado
+
+      const matchDataInicial =
+        !filtros.dataInicial || dataLancamento >= filtros.dataInicial
+
+      const matchDataFinal =
+        !filtros.dataFinal || dataLancamento <= filtros.dataFinal
+
+      const dataObj = new Date(item.data)
+      const mesLancamento = String(dataObj.getMonth() + 1)
+      const anoLancamento = String(dataObj.getFullYear())
+
+      const matchMes = !filtros.mes || mesLancamento === filtros.mes
+      const matchAno = !filtros.ano || anoLancamento === filtros.ano
+
+      return (
+        matchProduto &&
+        matchTransportadora &&
+        matchEstado &&
+        matchDataInicial &&
+        matchDataFinal &&
+        matchMes &&
+        matchAno
+      )
+    })
+  }, [lancamentosRaw, filtros, produtos, transportadoras, cidades, estados])
 
   const totalLancamentos = useMemo(() => {
     return resultadosFiltrados.reduce(
@@ -235,8 +383,23 @@ export default function DashboardPage() {
     return cubagemTotal > 0 ? freteTotal / cubagemTotal : 0
   }, [resultadosFiltrados])
 
+  const prazoMedioGeral = useMemo(() => {
+    const itensComPrazo = lancamentosFiltradosPrazo.filter(
+      (item) => item.prazo_entrega != null
+    )
+
+    if (!itensComPrazo.length) return 0
+
+    const total = itensComPrazo.reduce(
+      (acc, item) => acc + Number(item.prazo_entrega || 0),
+      0
+    )
+
+    return total / itensComPrazo.length
+  }, [lancamentosFiltradosPrazo])
+
   const rankingTransportadoras = useMemo<RankingTransportadora[]>(() => {
-    const mapa = new Map<
+    const mapaResultado = new Map<
       string,
       {
         transportadora: string
@@ -250,8 +413,8 @@ export default function DashboardPage() {
     resultadosFiltrados.forEach((item) => {
       const chave = item.transportadora || 'Não informada'
 
-      if (!mapa.has(chave)) {
-        mapa.set(chave, {
+      if (!mapaResultado.has(chave)) {
+        mapaResultado.set(chave, {
           transportadora: chave,
           freteTotal: 0,
           pesoTotal: 0,
@@ -260,33 +423,71 @@ export default function DashboardPage() {
         })
       }
 
-      const atual = mapa.get(chave)!
+      const atual = mapaResultado.get(chave)!
       atual.freteTotal += Number(item.frete_medio || 0)
       atual.pesoTotal += Number(item.peso_total_medio || 0)
       atual.cubagemTotal += Number(item.cubagem_total_media || 0)
       atual.registros += 1
     })
 
-    return Array.from(mapa.values())
+    const mapaPrazo = new Map<
+      string,
+      {
+        somaPrazo: number
+        registrosPrazo: number
+      }
+    >()
+
+    lancamentosFiltradosPrazo.forEach((item) => {
+      const nomeTransportadora = getTransportadoraNomeById(item.transportadora_id) || 'Não informada'
+
+      if (!mapaPrazo.has(nomeTransportadora)) {
+        mapaPrazo.set(nomeTransportadora, {
+          somaPrazo: 0,
+          registrosPrazo: 0
+        })
+      }
+
+      if (item.prazo_entrega != null) {
+        const atual = mapaPrazo.get(nomeTransportadora)!
+        atual.somaPrazo += Number(item.prazo_entrega || 0)
+        atual.registrosPrazo += 1
+      }
+    })
+
+    return Array.from(mapaResultado.values())
       .map((item) => {
         const freteMedio = item.registros > 0 ? item.freteTotal / item.registros : 0
         const custoKg = item.pesoTotal > 0 ? item.freteTotal / item.pesoTotal : 0
         const custoM3 = item.cubagemTotal > 0 ? item.freteTotal / item.cubagemTotal : 0
-        const score = custoKg * 0.45 + custoM3 * 0.25 + freteMedio * 0.30
+
+        const prazoData = mapaPrazo.get(item.transportadora)
+        const prazoMedio =
+          prazoData && prazoData.registrosPrazo > 0
+            ? prazoData.somaPrazo / prazoData.registrosPrazo
+            : 0
+
+        const score =
+          custoKg * 0.35 +
+          custoM3 * 0.20 +
+          freteMedio * 0.25 +
+          prazoMedio * 0.20
 
         return {
           transportadora: item.transportadora,
           freteMedio: Number(freteMedio.toFixed(2)),
           custoKg: Number(custoKg.toFixed(4)),
           custoM3: Number(custoM3.toFixed(4)),
-          score: Number(score.toFixed(4)),
+          prazoMedio: Number(prazoMedio.toFixed(2)),
+          score,
+          scoreFormatado: Number(score.toFixed(2)),
           registros: item.registros,
           pesoTotal: Number(item.pesoTotal.toFixed(2)),
           cubagemTotal: Number(item.cubagemTotal.toFixed(4))
         }
       })
       .sort((a, b) => a.score - b.score)
-  }, [resultadosFiltrados])
+  }, [resultadosFiltrados, lancamentosFiltradosPrazo, produtos, transportadoras, cidades, estados])
 
   const melhorTransportadora = rankingTransportadoras[0] || null
   const piorTransportadora = rankingTransportadoras[rankingTransportadoras.length - 1] || null
@@ -319,6 +520,36 @@ export default function DashboardPage() {
       .slice(0, 10)
   }, [resultadosFiltrados])
 
+  const prazoPorTransportadora = useMemo(() => {
+    const mapa = new Map<string, { transportadora: string; prazo: number; registros: number }>()
+
+    lancamentosFiltradosPrazo.forEach((item) => {
+      if (item.prazo_entrega == null) return
+
+      const nomeTransportadora = getTransportadoraNomeById(item.transportadora_id) || 'Não informada'
+
+      if (!mapa.has(nomeTransportadora)) {
+        mapa.set(nomeTransportadora, {
+          transportadora: nomeTransportadora,
+          prazo: 0,
+          registros: 0
+        })
+      }
+
+      const atual = mapa.get(nomeTransportadora)!
+      atual.prazo += Number(item.prazo_entrega || 0)
+      atual.registros += 1
+    })
+
+    return Array.from(mapa.values())
+      .map((item) => ({
+        transportadora: item.transportadora,
+        prazoMedio: item.registros > 0 ? Number((item.prazo / item.registros).toFixed(2)) : 0
+      }))
+      .sort((a, b) => a.prazoMedio - b.prazoMedio)
+      .slice(0, 8)
+  }, [lancamentosFiltradosPrazo, transportadoras])
+
   const topProdutos = useMemo(() => {
     const mapa = new Map<string, number>()
 
@@ -333,16 +564,13 @@ export default function DashboardPage() {
       .slice(0, 6)
   }, [resultadosFiltrados])
 
-  const comparativoTransportadoras = useMemo(() => {
-    return rankingTransportadoras.slice(0, 8)
-  }, [rankingTransportadoras])
-
   const graficoCombinado = useMemo(() => {
     return rankingTransportadoras.slice(0, 8).map((item) => ({
       transportadora: item.transportadora,
       freteMedio: item.freteMedio,
       custoKg: Number(item.custoKg.toFixed(2)),
-      custoM3: Number(item.custoM3.toFixed(2))
+      custoM3: Number(item.custoM3.toFixed(2)),
+      prazoMedio: Number(item.prazoMedio.toFixed(2))
     }))
   }, [rankingTransportadoras])
 
@@ -350,7 +578,7 @@ export default function DashboardPage() {
     return rankingTransportadoras.slice(0, 8).map((item, index) => ({
       posicao: index + 1,
       transportadora: item.transportadora,
-      score: Number(item.score.toFixed(2))
+      score: item.scoreFormatado
     }))
   }, [rankingTransportadoras])
 
@@ -370,6 +598,10 @@ export default function DashboardPage() {
       lista.push('O custo médio por m³ está alto para a base atual.')
     }
 
+    if (prazoMedioGeral > 7) {
+      lista.push('O prazo médio de entrega está elevado para a visão atual.')
+    }
+
     if (melhorTransportadora && piorTransportadora) {
       const diferenca = melhorTransportadora.score > 0
         ? piorTransportadora.score / melhorTransportadora.score
@@ -381,7 +613,7 @@ export default function DashboardPage() {
     }
 
     return lista
-  }, [resultadosFiltrados, custoMedioKg, custoMedioM3, melhorTransportadora, piorTransportadora])
+  }, [resultadosFiltrados, custoMedioKg, custoMedioM3, prazoMedioGeral, melhorTransportadora, piorTransportadora])
 
   const pieColors = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2']
 
@@ -713,6 +945,12 @@ export default function DashboardPage() {
             <div style={kpiHintStyle}>Relação frete x cubagem</div>
           </div>
 
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #ecfeff 0%, #cffafe 100%)' }}>
+            <div style={kpiTitleStyle}>Prazo médio de entrega</div>
+            <div style={kpiValueStyle}>{formatarNumero(prazoMedioGeral, 1)} dias</div>
+            <div style={kpiHintStyle}>Média dos lançamentos filtrados</div>
+          </div>
+
           <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)' }}>
             <div style={kpiTitleStyle}>Peso total médio</div>
             <div style={kpiValueStyle}>{formatarNumero(pesoMedioGeral, 2)} kg</div>
@@ -728,13 +966,17 @@ export default function DashboardPage() {
           <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%)' }}>
             <div style={kpiTitleStyle}>Melhor transportadora</div>
             <div style={{ ...kpiValueStyle, fontSize: '24px' }}>{melhorTransportadora?.transportadora || '-'}</div>
-            <div style={kpiHintStyle}>Score: {formatarNumero(melhorTransportadora?.score || 0, 2)}</div>
+            <div style={kpiHintStyle}>
+              Score: {formatarNumero(melhorTransportadora?.scoreFormatado || 0, 2)} | Prazo: {formatarNumero(melhorTransportadora?.prazoMedio || 0, 1)} dias
+            </div>
           </div>
 
           <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)' }}>
             <div style={kpiTitleStyle}>Pior transportadora</div>
             <div style={{ ...kpiValueStyle, fontSize: '24px' }}>{piorTransportadora?.transportadora || '-'}</div>
-            <div style={kpiHintStyle}>Score: {formatarNumero(piorTransportadora?.score || 0, 2)}</div>
+            <div style={kpiHintStyle}>
+              Score: {formatarNumero(piorTransportadora?.scoreFormatado || 0, 2)} | Prazo: {formatarNumero(piorTransportadora?.prazoMedio || 0, 1)} dias
+            </div>
           </div>
         </div>
 
@@ -749,7 +991,7 @@ export default function DashboardPage() {
           <div style={cardStyle}>
             <div style={chartTitleStyle}>Comparativo de transportadoras</div>
             <div style={chartSubtitleStyle}>
-              Visão comparativa de frete médio e custo por kg das principais transportadoras.
+              Visão comparativa de frete médio, custo por kg, custo por m³ e prazo médio.
             </div>
             <div style={{ width: '100%', height: 380 }}>
               <ResponsiveContainer width='100%' height='100%'>
@@ -768,6 +1010,7 @@ export default function DashboardPage() {
                       if (name === 'Frete Médio') return formatarMoeda(Number(value || 0))
                       if (name === 'Custo/Kg') return formatarMoeda(Number(value || 0))
                       if (name === 'Custo/m³') return formatarMoeda(Number(value || 0))
+                      if (name === 'Prazo Médio') return `${formatarNumero(Number(value || 0), 1)} dias`
                       return formatarNumero(Number(value || 0), 2)
                     }}
                   />
@@ -775,6 +1018,7 @@ export default function DashboardPage() {
                   <Bar dataKey='freteMedio' name='Frete Médio' fill='#2563eb' radius={[8, 8, 0, 0]} />
                   <Bar dataKey='custoKg' name='Custo/Kg' fill='#16a34a' radius={[8, 8, 0, 0]} />
                   <Bar dataKey='custoM3' name='Custo/m³' fill='#f97316' radius={[8, 8, 0, 0]} />
+                  <Bar dataKey='prazoMedio' name='Prazo Médio' fill='#0891b2' radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -820,11 +1064,11 @@ export default function DashboardPage() {
           <div style={cardStyle}>
             <div style={chartTitleStyle}>Ranking de transportadoras</div>
             <div style={chartSubtitleStyle}>
-              Menor score representa melhor eficiência consolidada.
+              Menor score representa melhor eficiência consolidada. O score agora considera custo e prazo.
             </div>
 
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '760px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '860px' }}>
                 <thead>
                   <tr>
                     <th style={thStyle}>#</th>
@@ -832,6 +1076,7 @@ export default function DashboardPage() {
                     <th style={thStyle}>Frete médio</th>
                     <th style={thStyle}>Custo/kg</th>
                     <th style={thStyle}>Custo/m³</th>
+                    <th style={thStyle}>Prazo médio</th>
                     <th style={thStyle}>Score</th>
                   </tr>
                 </thead>
@@ -856,7 +1101,8 @@ export default function DashboardPage() {
                         <td style={tdStyle}>{formatarMoeda(item.freteMedio)}</td>
                         <td style={tdStyle}>{formatarMoeda(item.custoKg)}</td>
                         <td style={tdStyle}>{formatarMoeda(item.custoM3)}</td>
-                        <td style={tdStyle}>{formatarNumero(item.score, 2)}</td>
+                        <td style={tdStyle}>{formatarNumero(item.prazoMedio, 1)} dias</td>
+                        <td style={tdStyle}>{formatarNumero(item.scoreFormatado, 2)}</td>
                       </tr>
                     )
                   })}
@@ -892,21 +1138,54 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div style={cardStyle}>
-          <div style={chartTitleStyle}>Frete médio por estado</div>
-          <div style={chartSubtitleStyle}>
-            Estados com maior custo médio de frete na operação.
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            gap: '16px',
+            marginBottom: '24px'
+          }}
+        >
+          <div style={cardStyle}>
+            <div style={chartTitleStyle}>Frete médio por estado</div>
+            <div style={chartSubtitleStyle}>
+              Estados com maior custo médio de frete na operação.
+            </div>
+            <div style={{ width: '100%', height: 360 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={fretePorEstado}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis dataKey='uf' />
+                  <YAxis />
+                  <Tooltip formatter={(value) => formatarMoeda(Number(value || 0))} />
+                  <Bar dataKey='frete' fill='#7c3aed' radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div style={{ width: '100%', height: 360 }}>
-            <ResponsiveContainer width='100%' height='100%'>
-              <BarChart data={fretePorEstado}>
-                <CartesianGrid strokeDasharray='3 3' vertical={false} />
-                <XAxis dataKey='uf' />
-                <YAxis />
-                <Tooltip formatter={(value) => formatarMoeda(Number(value || 0))} />
-                <Bar dataKey='frete' fill='#7c3aed' radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+
+          <div style={cardStyle}>
+            <div style={chartTitleStyle}>Prazo médio por transportadora</div>
+            <div style={chartSubtitleStyle}>
+              Comparativo do prazo médio de entrega entre as principais transportadoras.
+            </div>
+            <div style={{ width: '100%', height: 360 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={prazoPorTransportadora}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis
+                    dataKey='transportadora'
+                    interval={0}
+                    angle={-12}
+                    textAnchor='end'
+                    height={70}
+                  />
+                  <YAxis />
+                  <Tooltip formatter={(value) => `${formatarNumero(Number(value || 0), 1)} dias`} />
+                  <Bar dataKey='prazoMedio' fill='#0891b2' radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
       </div>

@@ -3,17 +3,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
+  ResponsiveContainer,
   BarChart,
   Bar,
   XAxis,
   YAxis,
-  Tooltip,
   CartesianGrid,
-  ResponsiveContainer,
+  Tooltip,
+  Legend,
   PieChart,
   Pie,
   Cell,
-  Legend
+  LineChart,
+  Line
 } from 'recharts'
 
 type Resultado = {
@@ -30,15 +32,37 @@ type Resultado = {
   frete_medio: number
 }
 
-type RankingTransportadora = {
+type Produto = {
+  id: number
   nome: string
-  freteMedio: number
-  custoKg: number
-  custoM3: number
-  score: number
-  pesoTotal: number
-  cubagemTotal: number
-  totalRegistros: number
+}
+
+type Transportadora = {
+  id: number
+  nome: string
+}
+
+type Cidade = {
+  id: number
+  nome: string
+  estado_id: number
+}
+
+type Estado = {
+  id: number
+  nome: string
+  uf: string
+}
+
+type LancamentoFrete = {
+  id: number
+  data: string
+  produto_id: number
+  transportadora_id: number
+  cidade_id: number
+  quantidade: number
+  valor_frete: number
+  prazo_entrega: number | null
 }
 
 type Filtros = {
@@ -51,6 +75,16 @@ type Filtros = {
   produto: string
 }
 
+type RankingTransportadora = {
+  transportadora: string
+  freteMedio: number
+  custoKg: number
+  custoM3: number
+  prazoMedio: number
+  score: number
+  registros: number
+}
+
 const filtrosIniciais: Filtros = {
   dataInicial: '',
   dataFinal: '',
@@ -61,9 +95,22 @@ const filtrosIniciais: Filtros = {
   produto: ''
 }
 
+function normalizarMenorMelhor(valor: number, min: number, max: number) {
+  if (max === min) return 1
+  return (max - valor) / (max - min)
+}
+
+function limitarNumero(valor: number, casas = 4) {
+  return Number(valor.toFixed(casas))
+}
+
 export default function DashboardPage() {
   const [resultados, setResultados] = useState<Resultado[]>([])
-  const [resultadosPeriodoAnterior, setResultadosPeriodoAnterior] = useState<Resultado[]>([])
+  const [lancamentosRaw, setLancamentosRaw] = useState<LancamentoFrete[]>([])
+  const [produtos, setProdutos] = useState<Produto[]>([])
+  const [transportadoras, setTransportadoras] = useState<Transportadora[]>([])
+  const [cidades, setCidades] = useState<Cidade[]>([])
+  const [estados, setEstados] = useState<Estado[]>([])
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState('')
   const [filtros, setFiltros] = useState<Filtros>(filtrosIniciais)
@@ -77,81 +124,70 @@ export default function DashboardPage() {
       setLoading(true)
       setErro('')
 
-      const { data, error } = await supabase.rpc(
-        'resultado_frete_por_produto_estado',
-        {
+      const [
+        rpcResponse,
+        lancamentosResponse,
+        produtosResponse,
+        transportadorasResponse,
+        cidadesResponse,
+        estadosResponse
+      ] = await Promise.all([
+        supabase.rpc('resultado_frete_por_produto_estado', {
           filtro_mes: filtros.mes ? Number(filtros.mes) : null,
           filtro_ano: filtros.ano ? Number(filtros.ano) : null,
           filtro_data_inicial: filtros.dataInicial || null,
           filtro_data_final: filtros.dataFinal || null
-        }
-      )
+        }),
+        supabase
+          .from('lancamentos_frete')
+          .select('id, data, produto_id, transportadora_id, cidade_id, quantidade, valor_frete, prazo_entrega')
+          .order('id', { ascending: false }),
+        supabase.from('produtos').select('id, nome'),
+        supabase.from('transportadoras').select('id, nome'),
+        supabase.from('cidades').select('id, nome, estado_id'),
+        supabase.from('estados').select('id, nome, uf')
+      ])
 
-      if (error) {
-        console.error('Erro ao buscar dashboard:', error)
-        setErro('Não foi possível carregar os dados do dashboard.')
+      if (rpcResponse.error) {
+        console.error('Erro ao buscar dashboard:', rpcResponse.error)
+        setErro('Não foi possível carregar os dados consolidados do dashboard.')
         return
       }
 
-      setResultados(data || [])
-      await buscarPeriodoAnterior()
+      if (lancamentosResponse.error) {
+        console.error('Erro ao buscar lançamentos do dashboard:', lancamentosResponse.error)
+        setErro('Não foi possível carregar os lançamentos do dashboard.')
+        return
+      }
+
+      if (produtosResponse.error) {
+        console.error('Erro ao buscar produtos do dashboard:', produtosResponse.error)
+      }
+
+      if (transportadorasResponse.error) {
+        console.error('Erro ao buscar transportadoras do dashboard:', transportadorasResponse.error)
+      }
+
+      if (cidadesResponse.error) {
+        console.error('Erro ao buscar cidades do dashboard:', cidadesResponse.error)
+      }
+
+      if (estadosResponse.error) {
+        console.error('Erro ao buscar estados do dashboard:', estadosResponse.error)
+      }
+
+      setResultados(rpcResponse.data || [])
+      setLancamentosRaw(lancamentosResponse.data || [])
+      setProdutos(produtosResponse.data || [])
+      setTransportadoras(transportadorasResponse.data || [])
+      setCidades(cidadesResponse.data || [])
+      setEstados(estadosResponse.data || [])
     } catch (error) {
       console.error('Erro ao buscar dashboard:', error)
       setErro('Ocorreu um erro inesperado ao carregar o dashboard.')
     } finally {
       setLoading(false)
     }
-  }
-
-  async function buscarPeriodoAnterior() {
-    if (!filtros.dataInicial || !filtros.dataFinal) {
-      setResultadosPeriodoAnterior([])
-      return
-    }
-
-    try {
-      const dataInicialAtual = new Date(filtros.dataInicial + 'T00:00:00')
-      const dataFinalAtual = new Date(filtros.dataFinal + 'T00:00:00')
-
-      if (Number.isNaN(dataInicialAtual.getTime()) || Number.isNaN(dataFinalAtual.getTime())) {
-        setResultadosPeriodoAnterior([])
-        return
-      }
-
-      const diffMs = dataFinalAtual.getTime() - dataInicialAtual.getTime()
-      const umDia = 24 * 60 * 60 * 1000
-
-      const dataFinalAnterior = new Date(dataInicialAtual.getTime() - umDia)
-      const dataInicialAnterior = new Date(dataFinalAnterior.getTime() - diffMs)
-
-      const { data, error } = await supabase.rpc(
-        'resultado_frete_por_produto_estado',
-        {
-          filtro_mes: null,
-          filtro_ano: null,
-          filtro_data_inicial: formatarDataISO(dataInicialAnterior),
-          filtro_data_final: formatarDataISO(dataFinalAnterior)
-        }
-      )
-
-      if (error) {
-        console.error('Erro ao buscar período anterior:', error)
-        setResultadosPeriodoAnterior([])
-        return
-      }
-
-      setResultadosPeriodoAnterior(data || [])
-    } catch (error) {
-      console.error('Erro ao buscar período anterior:', error)
-      setResultadosPeriodoAnterior([])
-    }
-  }
-
-  function formatarDataISO(data: Date) {
-    const ano = data.getFullYear()
-    const mes = String(data.getMonth() + 1).padStart(2, '0')
-    const dia = String(data.getDate()).padStart(2, '0')
-    return `${ano}-${mes}-${dia}`
   }
 
   function atualizarFiltro<K extends keyof Filtros>(campo: K, valor: Filtros[K]) {
@@ -179,45 +215,28 @@ export default function DashboardPage() {
     })
   }
 
-  function calcularVariacao(atual: number, anterior: number) {
-    if (!anterior) return 0
-    return ((atual - anterior) / anterior) * 100
+  function formatarDataIso(data: string) {
+    return data.slice(0, 10)
   }
 
-  function calcularMedia(arr: Resultado[], campo: keyof Resultado) {
-    if (!arr.length) return 0
-
-    return (
-      arr.reduce((total, item) => total + Number(item[campo] || 0), 0) / arr.length
-    )
+  function getProdutoNomeById(id: number) {
+    return produtos.find((item) => item.id === id)?.nome || ''
   }
 
-  function calcularCustoKg(arr: Resultado[]) {
-    const freteTotal = arr.reduce(
-      (acc, item) => acc + Number(item.frete_medio || 0),
-      0
-    )
-
-    const pesoTotal = arr.reduce(
-      (acc, item) => acc + Number(item.peso_total_medio || 0),
-      0
-    )
-
-    return pesoTotal > 0 ? freteTotal / pesoTotal : 0
+  function getTransportadoraNomeById(id: number) {
+    return transportadoras.find((item) => item.id === id)?.nome || ''
   }
 
-  function calcularCustoM3(arr: Resultado[]) {
-    const freteTotal = arr.reduce(
-      (acc, item) => acc + Number(item.frete_medio || 0),
-      0
-    )
+  function getUfByCidadeId(cidadeId: number) {
+    const cidade = cidades.find((item) => item.id === cidadeId)
+    if (!cidade) return ''
+    return estados.find((item) => item.id === cidade.estado_id)?.uf || ''
+  }
 
-    const cubagemTotal = arr.reduce(
-      (acc, item) => acc + Number(item.cubagem_total_media || 0),
-      0
-    )
-
-    return cubagemTotal > 0 ? freteTotal / cubagemTotal : 0
+  function getEstadoNomeByCidadeId(cidadeId: number) {
+    const cidade = cidades.find((item) => item.id === cidadeId)
+    if (!cidade) return ''
+    return estados.find((item) => item.id === cidade.estado_id)?.nome || ''
   }
 
   const opcoesTransportadora = useMemo(() => {
@@ -266,21 +285,48 @@ export default function DashboardPage() {
     })
   }, [resultados, filtros.transportadora, filtros.estado, filtros.produto])
 
-  const resultadosPeriodoAnteriorFiltrados = useMemo(() => {
-    return resultadosPeriodoAnterior.filter((item) => {
-      const matchTransportadora =
-        !filtros.transportadora || item.transportadora === filtros.transportadora
+  const lancamentosFiltradosPrazo = useMemo(() => {
+    return lancamentosRaw.filter((item) => {
+      const nomeProduto = getProdutoNomeById(item.produto_id)
+      const nomeTransportadora = getTransportadoraNomeById(item.transportadora_id)
+      const uf = getUfByCidadeId(item.cidade_id)
+      const estadoNome = getEstadoNomeByCidadeId(item.cidade_id)
+      const dataLancamento = formatarDataIso(item.data)
 
-      const ufOuEstado = item.uf || item.estado || ''
+      const matchProduto =
+        !filtros.produto || nomeProduto === filtros.produto
+
+      const matchTransportadora =
+        !filtros.transportadora || nomeTransportadora === filtros.transportadora
+
+      const ufOuEstado = uf || estadoNome || ''
       const matchEstado =
         !filtros.estado || ufOuEstado === filtros.estado
 
-      const matchProduto =
-        !filtros.produto || item.produto === filtros.produto
+      const matchDataInicial =
+        !filtros.dataInicial || dataLancamento >= filtros.dataInicial
 
-      return matchTransportadora && matchEstado && matchProduto
+      const matchDataFinal =
+        !filtros.dataFinal || dataLancamento <= filtros.dataFinal
+
+      const dataObj = new Date(item.data)
+      const mesLancamento = String(dataObj.getMonth() + 1)
+      const anoLancamento = String(dataObj.getFullYear())
+
+      const matchMes = !filtros.mes || mesLancamento === filtros.mes
+      const matchAno = !filtros.ano || anoLancamento === filtros.ano
+
+      return (
+        matchProduto &&
+        matchTransportadora &&
+        matchEstado &&
+        matchDataInicial &&
+        matchDataFinal &&
+        matchMes &&
+        matchAno
+      )
     })
-  }, [resultadosPeriodoAnterior, filtros.transportadora, filtros.estado, filtros.produto])
+  }, [lancamentosRaw, filtros, produtos, transportadoras, cidades, estados])
 
   const totalLancamentos = useMemo(() => {
     return resultadosFiltrados.reduce(
@@ -289,251 +335,300 @@ export default function DashboardPage() {
     )
   }, [resultadosFiltrados])
 
-  const totalLancamentosAnterior = useMemo(() => {
-    return resultadosPeriodoAnteriorFiltrados.reduce(
-      (total, item) => total + Number(item.qtd_lancamentos || 0),
-      0
-    )
-  }, [resultadosPeriodoAnteriorFiltrados])
-
   const freteMedioGeral = useMemo(() => {
-    return calcularMedia(resultadosFiltrados, 'frete_medio')
+    if (!resultadosFiltrados.length) return 0
+    return (
+      resultadosFiltrados.reduce(
+        (total, item) => total + Number(item.frete_medio || 0),
+        0
+      ) / resultadosFiltrados.length
+    )
   }, [resultadosFiltrados])
-
-  const freteMedioGeralAnterior = useMemo(() => {
-    return calcularMedia(resultadosPeriodoAnteriorFiltrados, 'frete_medio')
-  }, [resultadosPeriodoAnteriorFiltrados])
-
-  const cubagemMediaGeral = useMemo(() => {
-    return calcularMedia(resultadosFiltrados, 'cubagem_total_media')
-  }, [resultadosFiltrados])
-
-  const cubagemMediaGeralAnterior = useMemo(() => {
-    return calcularMedia(resultadosPeriodoAnteriorFiltrados, 'cubagem_total_media')
-  }, [resultadosPeriodoAnteriorFiltrados])
-
-  const quantidadeMediaGeral = useMemo(() => {
-    return calcularMedia(resultadosFiltrados, 'quantidade_media')
-  }, [resultadosFiltrados])
-
-  const quantidadeMediaGeralAnterior = useMemo(() => {
-    return calcularMedia(resultadosPeriodoAnteriorFiltrados, 'quantidade_media')
-  }, [resultadosPeriodoAnteriorFiltrados])
 
   const pesoMedioGeral = useMemo(() => {
-    return calcularMedia(resultadosFiltrados, 'peso_total_medio')
+    if (!resultadosFiltrados.length) return 0
+    return (
+      resultadosFiltrados.reduce(
+        (total, item) => total + Number(item.peso_total_medio || 0),
+        0
+      ) / resultadosFiltrados.length
+    )
   }, [resultadosFiltrados])
 
-  const pesoMedioGeralAnterior = useMemo(() => {
-    return calcularMedia(resultadosPeriodoAnteriorFiltrados, 'peso_total_medio')
-  }, [resultadosPeriodoAnteriorFiltrados])
-
-  const custoMedioKgGeral = useMemo(() => {
-    return calcularCustoKg(resultadosFiltrados)
+  const cubagemMediaGeral = useMemo(() => {
+    if (!resultadosFiltrados.length) return 0
+    return (
+      resultadosFiltrados.reduce(
+        (total, item) => total + Number(item.cubagem_total_media || 0),
+        0
+      ) / resultadosFiltrados.length
+    )
   }, [resultadosFiltrados])
 
-  const custoMedioKgGeralAnterior = useMemo(() => {
-    return calcularCustoKg(resultadosPeriodoAnteriorFiltrados)
-  }, [resultadosPeriodoAnteriorFiltrados])
-
-  const custoMedioM3Geral = useMemo(() => {
-    return calcularCustoM3(resultadosFiltrados)
+  const custoMedioKg = useMemo(() => {
+    const freteTotal = resultadosFiltrados.reduce(
+      (acc, item) => acc + Number(item.frete_medio || 0),
+      0
+    )
+    const pesoTotal = resultadosFiltrados.reduce(
+      (acc, item) => acc + Number(item.peso_total_medio || 0),
+      0
+    )
+    return pesoTotal > 0 ? freteTotal / pesoTotal : 0
   }, [resultadosFiltrados])
 
-  const custoMedioM3GeralAnterior = useMemo(() => {
-    return calcularCustoM3(resultadosPeriodoAnteriorFiltrados)
-  }, [resultadosPeriodoAnteriorFiltrados])
-
-  const fretePorEstado = useMemo(() => {
-    const mapa = new Map<string, { estado: string; frete: number; count: number }>()
-
-    resultadosFiltrados.forEach((item) => {
-      const chave = item.uf || item.estado || 'N/I'
-      const atual = mapa.get(chave)
-
-      if (atual) {
-        atual.frete += Number(item.frete_medio || 0)
-        atual.count += 1
-      } else {
-        mapa.set(chave, {
-          estado: chave,
-          frete: Number(item.frete_medio || 0),
-          count: 1
-        })
-      }
-    })
-
-    return Array.from(mapa.values())
-      .map((item) => ({
-        estado: item.estado,
-        frete: Number((item.frete / item.count).toFixed(2))
-      }))
-      .sort((a, b) => b.frete - a.frete)
-      .slice(0, 8)
+  const custoMedioM3 = useMemo(() => {
+    const freteTotal = resultadosFiltrados.reduce(
+      (acc, item) => acc + Number(item.frete_medio || 0),
+      0
+    )
+    const cubagemTotal = resultadosFiltrados.reduce(
+      (acc, item) => acc + Number(item.cubagem_total_media || 0),
+      0
+    )
+    return cubagemTotal > 0 ? freteTotal / cubagemTotal : 0
   }, [resultadosFiltrados])
 
-  const topProdutos = useMemo(() => {
-    const mapa = new Map<string, number>()
+  const prazoMedioGeral = useMemo(() => {
+    const itensComPrazo = lancamentosFiltradosPrazo.filter(
+      (item) => item.prazo_entrega != null
+    )
 
-    resultadosFiltrados.forEach((item) => {
-      const produto = item.produto || 'Não informado'
-      const atual = mapa.get(produto) || 0
-      mapa.set(produto, atual + Number(item.qtd_lancamentos || 0))
-    })
+    if (!itensComPrazo.length) return 0
 
-    return Array.from(mapa.entries())
-      .map(([produto, total]) => ({
-        produto,
-        total
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 6)
-  }, [resultadosFiltrados])
+    const total = itensComPrazo.reduce(
+      (acc, item) => acc + Number(item.prazo_entrega || 0),
+      0
+    )
+
+    return total / itensComPrazo.length
+  }, [lancamentosFiltradosPrazo])
 
   const rankingTransportadoras = useMemo<RankingTransportadora[]>(() => {
     const mapa = new Map<
       string,
       {
-        nome: string
-        frete: number
-        peso: number
-        cubagem: number
-        count: number
+        transportadora: string
+        freteTotal: number
+        pesoTotal: number
+        cubagemTotal: number
+        prazoTotal: number
+        registros: number
+        registrosPrazo: number
       }
     >()
 
     resultadosFiltrados.forEach((item) => {
       const chave = item.transportadora || 'Não informada'
+      const atual = mapa.get(chave)
 
-      if (!mapa.has(chave)) {
+      if (atual) {
+        atual.freteTotal += Number(item.frete_medio || 0)
+        atual.pesoTotal += Number(item.peso_total_medio || 0)
+        atual.cubagemTotal += Number(item.cubagem_total_media || 0)
+        atual.registros += 1
+      } else {
         mapa.set(chave, {
-          nome: chave,
-          frete: 0,
-          peso: 0,
-          cubagem: 0,
-          count: 0
+          transportadora: chave,
+          freteTotal: Number(item.frete_medio || 0),
+          pesoTotal: Number(item.peso_total_medio || 0),
+          cubagemTotal: Number(item.cubagem_total_media || 0),
+          prazoTotal: 0,
+          registros: 1,
+          registrosPrazo: 0
+        })
+      }
+    })
+
+    lancamentosFiltradosPrazo.forEach((item) => {
+      if (item.prazo_entrega == null) return
+
+      const nomeTransportadora = getTransportadoraNomeById(item.transportadora_id) || 'Não informada'
+
+      if (!mapa.has(nomeTransportadora)) {
+        mapa.set(nomeTransportadora, {
+          transportadora: nomeTransportadora,
+          freteTotal: 0,
+          pesoTotal: 0,
+          cubagemTotal: 0,
+          prazoTotal: 0,
+          registros: 0,
+          registrosPrazo: 0
         })
       }
 
-      const atual = mapa.get(chave)!
-
-      atual.frete += Number(item.frete_medio || 0)
-      atual.peso += Number(item.peso_total_medio || 0)
-      atual.cubagem += Number(item.cubagem_total_media || 0)
-      atual.count += 1
+      const atual = mapa.get(nomeTransportadora)!
+      atual.prazoTotal += Number(item.prazo_entrega || 0)
+      atual.registrosPrazo += 1
     })
 
-    return Array.from(mapa.values())
+    const base = Array.from(mapa.values()).map((item) => {
+      const freteMedio = item.registros > 0 ? item.freteTotal / item.registros : 0
+      const custoKg = item.pesoTotal > 0 ? item.freteTotal / item.pesoTotal : 0
+      const custoM3 = item.cubagemTotal > 0 ? item.freteTotal / item.cubagemTotal : 0
+      const prazoMedio = item.registrosPrazo > 0 ? item.prazoTotal / item.registrosPrazo : 0
+
+      return {
+        transportadora: item.transportadora,
+        freteMedio,
+        custoKg,
+        custoM3,
+        prazoMedio,
+        registros: item.registros
+      }
+    })
+
+    const fretes = base.map((item) => item.freteMedio)
+    const custosKg = base.map((item) => item.custoKg)
+    const custosM3 = base.map((item) => item.custoM3)
+    const prazos = base.map((item) => item.prazoMedio)
+
+    const minFrete = Math.min(...fretes, 0)
+    const maxFrete = Math.max(...fretes, 0)
+
+    const minCustoKg = Math.min(...custosKg, 0)
+    const maxCustoKg = Math.max(...custosKg, 0)
+
+    const minCustoM3 = Math.min(...custosM3, 0)
+    const maxCustoM3 = Math.max(...custosM3, 0)
+
+    const minPrazo = Math.min(...prazos, 0)
+    const maxPrazo = Math.max(...prazos, 0)
+
+    return base
       .map((item) => {
-        const freteMedio = item.count > 0 ? item.frete / item.count : 0
-        const custoKg = item.peso > 0 ? item.frete / item.peso : 0
-        const custoM3 = item.cubagem > 0 ? item.frete / item.cubagem : 0
-        const score = custoKg * 0.5 + custoM3 * 0.3 + freteMedio * 0.2
+        const notaFrete = normalizarMenorMelhor(item.freteMedio, minFrete, maxFrete)
+        const notaCustoKg = normalizarMenorMelhor(item.custoKg, minCustoKg, maxCustoKg)
+        const notaCustoM3 = normalizarMenorMelhor(item.custoM3, minCustoM3, maxCustoM3)
+        const notaPrazo = normalizarMenorMelhor(item.prazoMedio, minPrazo, maxPrazo)
+
+        const notaFinal =
+          notaCustoKg * 0.30 +
+          notaCustoM3 * 0.20 +
+          notaFrete * 0.25 +
+          notaPrazo * 0.25
+
+        const score = 100 - notaFinal * 100
 
         return {
-          nome: item.nome,
-          freteMedio: Number(freteMedio.toFixed(2)),
-          custoKg: Number(custoKg.toFixed(4)),
-          custoM3: Number(custoM3.toFixed(4)),
-          score: Number(score.toFixed(4)),
-          pesoTotal: Number(item.peso.toFixed(2)),
-          cubagemTotal: Number(item.cubagem.toFixed(4)),
-          totalRegistros: item.count
+          transportadora: item.transportadora,
+          freteMedio: limitarNumero(item.freteMedio, 2),
+          custoKg: limitarNumero(item.custoKg, 4),
+          custoM3: limitarNumero(item.custoM3, 4),
+          prazoMedio: limitarNumero(item.prazoMedio, 2),
+          score: limitarNumero(score, 2),
+          registros: item.registros
         }
       })
       .sort((a, b) => a.score - b.score)
-  }, [resultadosFiltrados])
+  }, [resultadosFiltrados, lancamentosFiltradosPrazo, produtos, transportadoras, cidades, estados])
 
   const melhorTransportadora = rankingTransportadoras[0] || null
-  const piorTransportadora =
-    rankingTransportadoras[rankingTransportadoras.length - 1] || null
+  const piorTransportadora = rankingTransportadoras[rankingTransportadoras.length - 1] || null
+
+  const fretePorEstado = useMemo(() => {
+    const mapa = new Map<string, { uf: string; frete: number; registros: number }>()
+
+    resultadosFiltrados.forEach((item) => {
+      const chave = item.uf || 'N/I'
+      const atual = mapa.get(chave)
+
+      if (atual) {
+        atual.frete += Number(item.frete_medio || 0)
+        atual.registros += 1
+      } else {
+        mapa.set(chave, {
+          uf: chave,
+          frete: Number(item.frete_medio || 0),
+          registros: 1
+        })
+      }
+    })
+
+    return Array.from(mapa.values())
+      .map((item) => ({
+        uf: item.uf,
+        frete: item.registros > 0 ? Number((item.frete / item.registros).toFixed(2)) : 0
+      }))
+      .sort((a, b) => b.frete - a.frete)
+      .slice(0, 10)
+  }, [resultadosFiltrados])
+
+  const prazoPorTransportadora = useMemo(() => {
+    return rankingTransportadoras
+      .slice(0, 8)
+      .map((item) => ({
+        transportadora: item.transportadora,
+        prazoMedio: item.prazoMedio
+      }))
+  }, [rankingTransportadoras])
+
+  const topProdutos = useMemo(() => {
+    const mapa = new Map<string, number>()
+
+    resultadosFiltrados.forEach((item) => {
+      const atual = mapa.get(item.produto || 'Não informado') || 0
+      mapa.set(item.produto || 'Não informado', atual + Number(item.qtd_lancamentos || 0))
+    })
+
+    return Array.from(mapa.entries())
+      .map(([produto, total]) => ({ produto, total }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 6)
+  }, [resultadosFiltrados])
+
+  const graficoCombinado = useMemo(() => {
+    return rankingTransportadoras.slice(0, 8).map((item) => ({
+      transportadora: item.transportadora,
+      freteMedio: item.freteMedio,
+      custoKg: Number(item.custoKg.toFixed(2)),
+      custoM3: Number(item.custoM3.toFixed(2)),
+      prazoMedio: Number(item.prazoMedio.toFixed(2))
+    }))
+  }, [rankingTransportadoras])
+
+  const graficoTendencia = useMemo(() => {
+    return rankingTransportadoras.slice(0, 8).map((item, index) => ({
+      posicao: index + 1,
+      transportadora: item.transportadora,
+      score: item.score
+    }))
+  }, [rankingTransportadoras])
 
   const alertas = useMemo(() => {
     const lista: string[] = []
 
-    if (melhorTransportadora && piorTransportadora) {
-      const diferencaScore =
-        melhorTransportadora.score > 0
-          ? piorTransportadora.score / melhorTransportadora.score
-          : 0
-
-      if (diferencaScore > 1.4) {
-        lista.push(
-          `Diferença relevante entre a melhor e a pior transportadora: ${(
-            diferencaScore * 100 - 100
-          ).toFixed(0)}%`
-        )
-      }
+    if (!resultadosFiltrados.length) {
+      lista.push('Nenhum dado encontrado com os filtros selecionados.')
+      return lista
     }
 
-    if (custoMedioKgGeral > 0 && custoMedioKgGeral > 8) {
+    if (custoMedioKg > 8) {
       lista.push('O custo médio por kg está elevado e merece revisão.')
     }
 
-    if (custoMedioM3Geral > 0 && custoMedioM3Geral > 1200) {
+    if (custoMedioM3 > 1200) {
       lista.push('O custo médio por m³ está alto para a base atual.')
     }
 
-    if (!resultadosFiltrados.length) {
-      lista.push('Nenhum registro encontrado para os filtros selecionados.')
+    if (prazoMedioGeral > 7) {
+      lista.push('O prazo médio de entrega está elevado para a visão atual.')
+    }
+
+    if (melhorTransportadora && piorTransportadora) {
+      const diferenca = melhorTransportadora.score > 0
+        ? piorTransportadora.score / melhorTransportadora.score
+        : 0
+
+      if (diferenca > 1.35) {
+        lista.push('Existe diferença relevante entre a melhor e a pior transportadora.')
+      }
     }
 
     return lista
-  }, [
-    melhorTransportadora,
-    piorTransportadora,
-    custoMedioKgGeral,
-    custoMedioM3Geral,
-    resultadosFiltrados.length
-  ])
-
-  const dadosComparativoTransportadoras = useMemo(() => {
-    return rankingTransportadoras.slice(0, 8)
-  }, [rankingTransportadoras])
-
-  const pesoPorTransportadora = useMemo(() => {
-    return rankingTransportadoras
-      .map((item) => ({
-        nome: item.nome,
-        peso: item.totalRegistros > 0 ? item.pesoTotal / item.totalRegistros : 0
-      }))
-      .sort((a, b) => b.peso - a.peso)
-      .slice(0, 8)
-      .map((item) => ({
-        ...item,
-        peso: Number(item.peso.toFixed(2))
-      }))
-  }, [rankingTransportadoras])
-
-  const variacoes = useMemo(() => {
-    return {
-      freteMedio: calcularVariacao(freteMedioGeral, freteMedioGeralAnterior),
-      totalLancamentos: calcularVariacao(totalLancamentos, totalLancamentosAnterior),
-      custoKg: calcularVariacao(custoMedioKgGeral, custoMedioKgGeralAnterior),
-      custoM3: calcularVariacao(custoMedioM3Geral, custoMedioM3GeralAnterior),
-      peso: calcularVariacao(pesoMedioGeral, pesoMedioGeralAnterior),
-      cubagem: calcularVariacao(cubagemMediaGeral, cubagemMediaGeralAnterior),
-      quantidade: calcularVariacao(quantidadeMediaGeral, quantidadeMediaGeralAnterior)
-    }
-  }, [
-    freteMedioGeral,
-    freteMedioGeralAnterior,
-    totalLancamentos,
-    totalLancamentosAnterior,
-    custoMedioKgGeral,
-    custoMedioKgGeralAnterior,
-    custoMedioM3Geral,
-    custoMedioM3GeralAnterior,
-    pesoMedioGeral,
-    pesoMedioGeralAnterior,
-    cubagemMediaGeral,
-    cubagemMediaGeralAnterior,
-    quantidadeMediaGeral,
-    quantidadeMediaGeralAnterior
-  ])
+  }, [resultadosFiltrados, custoMedioKg, custoMedioM3, prazoMedioGeral, melhorTransportadora, piorTransportadora])
 
   const pieColors = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2']
-  const barColors = ['#2563eb', '#16a34a', '#f97316', '#7c3aed']
 
   const pageStyle: React.CSSProperties = {
     padding: '24px',
@@ -542,7 +637,7 @@ export default function DashboardPage() {
   }
 
   const containerStyle: React.CSSProperties = {
-    maxWidth: '1600px',
+    maxWidth: '1650px',
     margin: '0 auto'
   }
 
@@ -554,9 +649,42 @@ export default function DashboardPage() {
     boxShadow: '0 14px 40px rgba(15, 23, 42, 0.08)'
   }
 
+  const titleStyle: React.CSSProperties = {
+    fontSize: '32px',
+    marginBottom: '8px',
+    color: '#0f172a',
+    fontWeight: 900
+  }
+
+  const subtitleStyle: React.CSSProperties = {
+    fontSize: '14px',
+    color: '#64748b',
+    marginBottom: '24px',
+    lineHeight: 1.6
+  }
+
+  const kpiTitleStyle: React.CSSProperties = {
+    fontSize: '13px',
+    color: '#64748b',
+    marginBottom: '10px',
+    fontWeight: 700
+  }
+
+  const kpiValueStyle: React.CSSProperties = {
+    fontSize: '30px',
+    fontWeight: 900,
+    color: '#0f172a'
+  }
+
+  const kpiHintStyle: React.CSSProperties = {
+    fontSize: '12px',
+    color: '#94a3b8',
+    marginTop: '8px'
+  }
+
   const chartTitleStyle: React.CSSProperties = {
     fontSize: '18px',
-    fontWeight: 700,
+    fontWeight: 800,
     marginBottom: '8px',
     color: '#0f172a'
   }
@@ -567,55 +695,73 @@ export default function DashboardPage() {
     marginBottom: '18px'
   }
 
-  const titleStyle: React.CSSProperties = {
-    fontSize: '30px',
-    marginBottom: '8px',
-    color: '#0f172a',
-    fontWeight: 800
-  }
-
-  const subtitleStyle: React.CSSProperties = {
-    fontSize: '14px',
-    color: '#64748b',
-    marginBottom: '24px',
-    lineHeight: 1.5
-  }
-
-  const kpiTitleStyle: React.CSSProperties = {
+  const thStyle: React.CSSProperties = {
+    textAlign: 'left',
+    padding: '14px 12px',
+    background: '#f8fafc',
+    borderBottom: '1px solid #e5e7eb',
+    color: '#334155',
     fontSize: '13px',
-    color: '#64748b',
-    marginBottom: '10px',
-    fontWeight: 600
+    fontWeight: 700,
+    whiteSpace: 'nowrap'
   }
 
-  const kpiValueStyle: React.CSSProperties = {
-    fontSize: '28px',
-    fontWeight: 800,
-    color: '#0f172a'
+  const tdStyle: React.CSSProperties = {
+    padding: '14px 12px',
+    borderBottom: '1px solid #f1f5f9',
+    color: '#0f172a',
+    fontSize: '14px',
+    whiteSpace: 'nowrap'
   }
 
-  const kpiHintStyle: React.CSSProperties = {
-    fontSize: '12px',
-    color: '#94a3b8',
-    marginTop: '8px'
+  const labelStyle: React.CSSProperties = {
+    display: 'block',
+    fontSize: '13px',
+    fontWeight: 600,
+    color: '#475569',
+    marginBottom: '6px'
+  }
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    height: '42px',
+    borderRadius: '12px',
+    border: '1px solid #dbe2ea',
+    padding: '0 12px',
+    fontSize: '14px',
+    color: '#0f172a',
+    background: '#fff',
+    outline: 'none'
+  }
+
+  const buttonStyle: React.CSSProperties = {
+    width: '100%',
+    height: '42px',
+    borderRadius: '12px',
+    border: 'none',
+    background: '#0f172a',
+    color: '#fff',
+    fontSize: '14px',
+    fontWeight: 700,
+    cursor: 'pointer'
   }
 
   return (
     <div style={pageStyle}>
       <div style={containerStyle}>
         <div style={{ marginBottom: '24px' }}>
-          <h1 style={titleStyle}>Dashboard de Frete</h1>
+          <h1 style={titleStyle}>Dashboard Executivo de Fretes</h1>
           <div style={subtitleStyle}>
-            Visão geral dos lançamentos, desempenho logístico, ranking de
-            transportadoras e comparação de custo por peso e cubagem.
+            Painel comparativo com indicadores estratégicos, ranking de transportadoras,
+            leitura visual de desempenho e visão executiva da operação logística.
           </div>
         </div>
 
         <div style={{ ...cardStyle, marginBottom: '24px' }}>
           <div style={chartTitleStyle}>Filtros do dashboard</div>
           <div style={chartSubtitleStyle}>
-            Os filtros de período consultam a base no Supabase. Os filtros de
-            transportadora, estado e produto refinam o resultado na tela.
+            Os filtros de período consultam a base no Supabase. Os filtros de transportadora,
+            estado e produto refinam o resultado na tela.
           </div>
 
           <div
@@ -629,7 +775,7 @@ export default function DashboardPage() {
             <div>
               <label style={labelStyle}>Data inicial</label>
               <input
-                type="date"
+                type='date'
                 value={filtros.dataInicial}
                 onChange={(e) => atualizarFiltro('dataInicial', e.target.value)}
                 style={inputStyle}
@@ -639,7 +785,7 @@ export default function DashboardPage() {
             <div>
               <label style={labelStyle}>Data final</label>
               <input
-                type="date"
+                type='date'
                 value={filtros.dataFinal}
                 onChange={(e) => atualizarFiltro('dataFinal', e.target.value)}
                 style={inputStyle}
@@ -653,27 +799,27 @@ export default function DashboardPage() {
                 onChange={(e) => atualizarFiltro('mes', e.target.value)}
                 style={inputStyle}
               >
-                <option value="">Todos</option>
-                <option value="1">Janeiro</option>
-                <option value="2">Fevereiro</option>
-                <option value="3">Março</option>
-                <option value="4">Abril</option>
-                <option value="5">Maio</option>
-                <option value="6">Junho</option>
-                <option value="7">Julho</option>
-                <option value="8">Agosto</option>
-                <option value="9">Setembro</option>
-                <option value="10">Outubro</option>
-                <option value="11">Novembro</option>
-                <option value="12">Dezembro</option>
+                <option value=''>Todos</option>
+                <option value='1'>Janeiro</option>
+                <option value='2'>Fevereiro</option>
+                <option value='3'>Março</option>
+                <option value='4'>Abril</option>
+                <option value='5'>Maio</option>
+                <option value='6'>Junho</option>
+                <option value='7'>Julho</option>
+                <option value='8'>Agosto</option>
+                <option value='9'>Setembro</option>
+                <option value='10'>Outubro</option>
+                <option value='11'>Novembro</option>
+                <option value='12'>Dezembro</option>
               </select>
             </div>
 
             <div>
               <label style={labelStyle}>Ano</label>
               <input
-                type="number"
-                placeholder="Ex.: 2026"
+                type='number'
+                placeholder='Ex.: 2026'
                 value={filtros.ano}
                 onChange={(e) => atualizarFiltro('ano', e.target.value)}
                 style={inputStyle}
@@ -687,7 +833,7 @@ export default function DashboardPage() {
                 onChange={(e) => atualizarFiltro('transportadora', e.target.value)}
                 style={inputStyle}
               >
-                <option value="">Todas</option>
+                <option value=''>Todas</option>
                 {opcoesTransportadora.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -703,7 +849,7 @@ export default function DashboardPage() {
                 onChange={(e) => atualizarFiltro('estado', e.target.value)}
                 style={inputStyle}
               >
-                <option value="">Todos</option>
+                <option value=''>Todos</option>
                 {opcoesEstado.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -719,7 +865,7 @@ export default function DashboardPage() {
                 onChange={(e) => atualizarFiltro('produto', e.target.value)}
                 style={inputStyle}
               >
-                <option value="">Todos</option>
+                <option value=''>Todos</option>
                 {opcoesProduto.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -729,23 +875,13 @@ export default function DashboardPage() {
             </div>
 
             <div>
-              <button
-                onClick={limparFiltros}
-                style={buttonStyle}
-                type="button"
-              >
+              <button onClick={limparFiltros} style={buttonStyle} type='button'>
                 Limpar filtros
               </button>
             </div>
           </div>
 
-          <div
-            style={{
-              marginTop: '16px',
-              fontSize: '13px',
-              color: '#64748b'
-            }}
-          >
+          <div style={{ marginTop: '16px', fontSize: '13px', color: '#64748b' }}>
             {loading
               ? 'Carregando dados...'
               : `${resultadosFiltrados.length} registros exibidos no dashboard.`}
@@ -770,13 +906,7 @@ export default function DashboardPage() {
         </div>
 
         {!!alertas.length && (
-          <div
-            style={{
-              display: 'grid',
-              gap: '12px',
-              marginBottom: '24px'
-            }}
-          >
+          <div style={{ display: 'grid', gap: '12px', marginBottom: '24px' }}>
             {alertas.map((alerta, index) => (
               <div
                 key={index}
@@ -787,7 +917,7 @@ export default function DashboardPage() {
                   borderRadius: '16px',
                   padding: '14px 16px',
                   fontSize: '14px',
-                  fontWeight: 600
+                  fontWeight: 700
                 }}
               >
                 ⚠️ {alerta}
@@ -804,106 +934,61 @@ export default function DashboardPage() {
             marginBottom: '24px'
           }}
         >
-          <KpiCard
-            title="Frete médio geral"
-            value={formatarMoeda(freteMedioGeral)}
-            hint="Média da base filtrada"
-            variation={variacoes.freteMedio}
-            previousValue={formatarMoeda(freteMedioGeralAnterior)}
-            isLowerBetter
-            background="linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)"
-          />
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)' }}>
+            <div style={kpiTitleStyle}>Frete médio geral</div>
+            <div style={kpiValueStyle}>{formatarMoeda(freteMedioGeral)}</div>
+            <div style={kpiHintStyle}>Média consolidada da base</div>
+          </div>
 
-          <KpiCard
-            title="Total de lançamentos"
-            value={formatarNumero(totalLancamentos, 0)}
-            hint="Total consolidado filtrado"
-            variation={variacoes.totalLancamentos}
-            previousValue={formatarNumero(totalLancamentosAnterior, 0)}
-            background="linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)"
-          />
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)' }}>
+            <div style={kpiTitleStyle}>Total de lançamentos</div>
+            <div style={kpiValueStyle}>{formatarNumero(totalLancamentos, 0)}</div>
+            <div style={kpiHintStyle}>Total consolidado</div>
+          </div>
 
-          <KpiCard
-            title="Custo médio por kg"
-            value={formatarMoeda(custoMedioKgGeral)}
-            hint="Baseado no peso filtrado"
-            variation={variacoes.custoKg}
-            previousValue={formatarMoeda(custoMedioKgGeralAnterior)}
-            isLowerBetter
-            background="linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%)"
-          />
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%)' }}>
+            <div style={kpiTitleStyle}>Custo médio por kg</div>
+            <div style={kpiValueStyle}>{formatarMoeda(custoMedioKg)}</div>
+            <div style={kpiHintStyle}>Relação frete x peso</div>
+          </div>
 
-          <KpiCard
-            title="Custo médio por m³"
-            value={formatarMoeda(custoMedioM3Geral)}
-            hint="Baseado na cubagem filtrada"
-            variation={variacoes.custoM3}
-            previousValue={formatarMoeda(custoMedioM3GeralAnterior)}
-            isLowerBetter
-            background="linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)"
-          />
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)' }}>
+            <div style={kpiTitleStyle}>Custo médio por m³</div>
+            <div style={kpiValueStyle}>{formatarMoeda(custoMedioM3)}</div>
+            <div style={kpiHintStyle}>Relação frete x cubagem</div>
+          </div>
 
-          <KpiCard
-            title="Peso total médio"
-            value={`${formatarNumero(pesoMedioGeral, 2)} kg`}
-            hint="Média de peso por registro"
-            variation={variacoes.peso}
-            previousValue={`${formatarNumero(pesoMedioGeralAnterior, 2)} kg`}
-            isLowerBetter
-            background="linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)"
-          />
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #ecfeff 0%, #cffafe 100%)' }}>
+            <div style={kpiTitleStyle}>Prazo médio de entrega</div>
+            <div style={kpiValueStyle}>{formatarNumero(prazoMedioGeral, 1)} dias</div>
+            <div style={kpiHintStyle}>Média dos lançamentos filtrados</div>
+          </div>
 
-          <KpiCard
-            title="Cubagem total média"
-            value={`${formatarNumero(cubagemMediaGeral, 4)} m³`}
-            hint="Média de cubagem por registro"
-            variation={variacoes.cubagem}
-            previousValue={`${formatarNumero(cubagemMediaGeralAnterior, 4)} m³`}
-            isLowerBetter
-            background="linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)"
-          />
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)' }}>
+            <div style={kpiTitleStyle}>Peso total médio</div>
+            <div style={kpiValueStyle}>{formatarNumero(pesoMedioGeral, 2)} kg</div>
+            <div style={kpiHintStyle}>Média por registro</div>
+          </div>
 
-          <div
-            style={{
-              ...cardStyle,
-              background: 'linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%)'
-            }}
-          >
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)' }}>
+            <div style={kpiTitleStyle}>Cubagem total média</div>
+            <div style={kpiValueStyle}>{formatarNumero(cubagemMediaGeral, 4)} m³</div>
+            <div style={kpiHintStyle}>Média por registro</div>
+          </div>
+
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%)' }}>
             <div style={kpiTitleStyle}>Melhor transportadora</div>
-            <div
-              style={{
-                fontSize: '24px',
-                fontWeight: 800,
-                color: '#0f172a',
-                lineHeight: 1.2
-              }}
-            >
-              {melhorTransportadora?.nome || '-'}
-            </div>
+            <div style={{ ...kpiValueStyle, fontSize: '24px' }}>{melhorTransportadora?.transportadora || '-'}</div>
             <div style={kpiHintStyle}>
-              Score: {formatarNumero(melhorTransportadora?.score || 0, 2)}
+              Score logístico: {formatarNumero(melhorTransportadora?.score || 0, 2)} | Prazo: {formatarNumero(melhorTransportadora?.prazoMedio || 0, 1)} dias
             </div>
           </div>
 
-          <div
-            style={{
-              ...cardStyle,
-              background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)'
-            }}
-          >
+          <div style={{ ...cardStyle, background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)' }}>
             <div style={kpiTitleStyle}>Pior transportadora</div>
-            <div
-              style={{
-                fontSize: '24px',
-                fontWeight: 800,
-                color: '#0f172a',
-                lineHeight: 1.2
-              }}
-            >
-              {piorTransportadora?.nome || '-'}
-            </div>
+            <div style={{ ...kpiValueStyle, fontSize: '24px' }}>{piorTransportadora?.transportadora || '-'}</div>
             <div style={kpiHintStyle}>
-              Score: {formatarNumero(piorTransportadora?.score || 0, 2)}
+              Score logístico: {formatarNumero(piorTransportadora?.score || 0, 2)} | Prazo: {formatarNumero(piorTransportadora?.prazoMedio || 0, 1)} dias
             </div>
           </div>
         </div>
@@ -911,123 +996,73 @@ export default function DashboardPage() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(0, 2fr) minmax(320px, 1fr)',
+            gridTemplateColumns: 'minmax(0, 1.5fr) minmax(320px, 1fr)',
             gap: '16px',
             marginBottom: '24px'
           }}
         >
           <div style={cardStyle}>
-            <div style={chartTitleStyle}>Frete médio por estado</div>
+            <div style={chartTitleStyle}>Comparativo de transportadoras</div>
             <div style={chartSubtitleStyle}>
-              Comparativo dos estados com maior frete médio.
+              Visão comparativa de frete médio, custo por kg, custo por m³ e prazo médio.
             </div>
-            <div style={{ width: '100%', height: 340 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={fretePorEstado}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="estado" />
+            <div style={{ width: '100%', height: 380 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={graficoCombinado}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis
+                    dataKey='transportadora'
+                    interval={0}
+                    angle={-12}
+                    textAnchor='end'
+                    height={70}
+                  />
                   <YAxis />
                   <Tooltip
-                    formatter={(value) => formatarMoeda(Number(value || 0))}
+                    formatter={(value, name) => {
+                      if (name === 'Frete Médio') return formatarMoeda(Number(value || 0))
+                      if (name === 'Custo/Kg') return formatarMoeda(Number(value || 0))
+                      if (name === 'Custo/m³') return formatarMoeda(Number(value || 0))
+                      if (name === 'Prazo Médio') return `${formatarNumero(Number(value || 0), 1)} dias`
+                      return formatarNumero(Number(value || 0), 2)
+                    }}
                   />
-                  <Bar dataKey="frete" fill="#2563eb" radius={[10, 10, 0, 0]} />
+                  <Legend />
+                  <Bar dataKey='freteMedio' name='Frete Médio' fill='#2563eb' radius={[8, 8, 0, 0]} />
+                  <Bar dataKey='custoKg' name='Custo/Kg' fill='#16a34a' radius={[8, 8, 0, 0]} />
+                  <Bar dataKey='custoM3' name='Custo/m³' fill='#f97316' radius={[8, 8, 0, 0]} />
+                  <Bar dataKey='prazoMedio' name='Prazo Médio' fill='#0891b2' radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
 
           <div style={cardStyle}>
-            <div style={chartTitleStyle}>Top produtos por lançamentos</div>
+            <div style={chartTitleStyle}>Participação por produto</div>
             <div style={chartSubtitleStyle}>
-              Produtos com maior participação na base.
+              Distribuição dos produtos com maior volume de lançamentos.
             </div>
-            <div style={{ width: '100%', height: 340 }}>
-              <ResponsiveContainer width="100%" height="100%">
+            <div style={{ width: '100%', height: 380 }}>
+              <ResponsiveContainer width='100%' height='100%'>
                 <PieChart>
                   <Pie
                     data={topProdutos}
-                    dataKey="total"
-                    nameKey="produto"
-                    outerRadius={110}
-                    innerRadius={55}
+                    dataKey='total'
+                    nameKey='produto'
+                    outerRadius={120}
+                    innerRadius={58}
                     paddingAngle={3}
                     labelLine={false}
-                    label={({ percent }) =>
-                      `${((percent || 0) * 100).toFixed(0)}%`
-                    }
+                    label={({ percent }) => `${((percent || 0) * 100).toFixed(0)}%`}
                   >
                     {topProdutos.map((_, index) => (
-                      <Cell
-                        key={index}
-                        fill={pieColors[index % pieColors.length]}
-                      />
+                      <Cell key={index} fill={pieColors[index % pieColors.length]} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    formatter={(value) => formatarNumero(Number(value || 0), 0)}
-                  />
+                  <Tooltip formatter={(value) => formatarNumero(Number(value || 0), 0)} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
-          </div>
-        </div>
-
-        <div style={{ ...cardStyle, marginBottom: '24px' }}>
-          <div style={chartTitleStyle}>Comparativo de transportadoras</div>
-          <div style={chartSubtitleStyle}>
-            Frete médio, custo por kg e custo por m³ das principais
-            transportadoras.
-          </div>
-          <div style={{ width: '100%', height: 420 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={dadosComparativoTransportadoras}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis
-                  dataKey="nome"
-                  interval={0}
-                  angle={-12}
-                  textAnchor="end"
-                  height={70}
-                />
-                <YAxis />
-                <Tooltip
-                  formatter={(value, name) => {
-                    if (name === 'Frete Médio') {
-                      return formatarMoeda(Number(value || 0))
-                    }
-
-                    if (name === 'Custo/Kg') {
-                      return formatarMoeda(Number(value || 0))
-                    }
-
-                    if (name === 'Custo/m³') {
-                      return formatarMoeda(Number(value || 0))
-                    }
-
-                    return formatarNumero(Number(value || 0), 2)
-                  }}
-                />
-                <Legend />
-                <Bar
-                  dataKey="freteMedio"
-                  name="Frete Médio"
-                  fill={barColors[0]}
-                  radius={[8, 8, 0, 0]}
-                />
-                <Bar
-                  dataKey="custoKg"
-                  name="Custo/Kg"
-                  fill={barColors[1]}
-                  radius={[8, 8, 0, 0]}
-                />
-                <Bar
-                  dataKey="custoM3"
-                  name="Custo/m³"
-                  fill={barColors[2]}
-                  radius={[8, 8, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
           </div>
         </div>
 
@@ -1040,13 +1075,13 @@ export default function DashboardPage() {
           }}
         >
           <div style={cardStyle}>
-            <div style={chartTitleStyle}>Ranking inteligente de transportadoras</div>
+            <div style={chartTitleStyle}>Ranking de transportadoras</div>
             <div style={chartSubtitleStyle}>
-              Menor score representa melhor desempenho geral.
+              Menor score representa melhor eficiência consolidada. O score está normalizado e considera custo e prazo.
             </div>
 
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '760px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '860px' }}>
                 <thead>
                   <tr>
                     <th style={thStyle}>#</th>
@@ -1054,6 +1089,7 @@ export default function DashboardPage() {
                     <th style={thStyle}>Frete médio</th>
                     <th style={thStyle}>Custo/kg</th>
                     <th style={thStyle}>Custo/m³</th>
+                    <th style={thStyle}>Prazo médio</th>
                     <th style={thStyle}>Score</th>
                   </tr>
                 </thead>
@@ -1064,7 +1100,7 @@ export default function DashboardPage() {
 
                     return (
                       <tr
-                        key={item.nome}
+                        key={item.transportadora}
                         style={{
                           background: isBest
                             ? '#f0fdf4'
@@ -1074,12 +1110,11 @@ export default function DashboardPage() {
                         }}
                       >
                         <td style={tdStyle}>{index + 1}</td>
-                        <td style={tdStyle}>
-                          <strong>{item.nome}</strong>
-                        </td>
+                        <td style={tdStyle}><strong>{item.transportadora}</strong></td>
                         <td style={tdStyle}>{formatarMoeda(item.freteMedio)}</td>
                         <td style={tdStyle}>{formatarMoeda(item.custoKg)}</td>
                         <td style={tdStyle}>{formatarMoeda(item.custoM3)}</td>
+                        <td style={tdStyle}>{formatarNumero(item.prazoMedio, 1)} dias</td>
                         <td style={tdStyle}>{formatarNumero(item.score, 2)}</td>
                       </tr>
                     )
@@ -1090,29 +1125,27 @@ export default function DashboardPage() {
           </div>
 
           <div style={cardStyle}>
-            <div style={chartTitleStyle}>Peso médio por transportadora</div>
+            <div style={chartTitleStyle}>Tendência de score por posição</div>
             <div style={chartSubtitleStyle}>
-              Média de peso movimentado entre as principais transportadoras.
+              Leitura rápida da diferença de desempenho entre as melhores transportadoras.
             </div>
             <div style={{ width: '100%', height: 360 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={pesoPorTransportadora}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis
-                    dataKey="nome"
-                    interval={0}
-                    angle={-12}
-                    textAnchor="end"
-                    height={70}
-                  />
+              <ResponsiveContainer width='100%' height='100%'>
+                <LineChart data={graficoTendencia}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis dataKey='posicao' />
                   <YAxis />
-                  <Tooltip
-                    formatter={(value) =>
-                      `${formatarNumero(Number(value || 0), 2)} kg`
-                    }
+                  <Tooltip formatter={(value) => formatarNumero(Number(value || 0), 2)} />
+                  <Legend />
+                  <Line
+                    type='monotone'
+                    dataKey='score'
+                    name='Score'
+                    stroke='#2563eb'
+                    strokeWidth={3}
+                    dot={{ r: 4 }}
                   />
-                  <Bar dataKey="peso" fill="#7c3aed" radius={[8, 8, 0, 0]} />
-                </BarChart>
+                </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
@@ -1121,184 +1154,54 @@ export default function DashboardPage() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-            gap: '16px'
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            gap: '16px',
+            marginBottom: '24px'
           }}
         >
-          <KpiCard
-            title="Quantidade média"
-            value={formatarNumero(quantidadeMediaGeral, 2)}
-            hint="Média de itens por registro analisado."
-            variation={variacoes.quantidade}
-            previousValue={formatarNumero(quantidadeMediaGeralAnterior, 2)}
-            background="#ffffff"
-          />
-
           <div style={cardStyle}>
-            <div style={chartTitleStyle}>Melhor score atual</div>
+            <div style={chartTitleStyle}>Frete médio por estado</div>
             <div style={chartSubtitleStyle}>
-              Quanto menor, melhor a performance logística consolidada.
+              Estados com maior custo médio de frete na operação.
             </div>
-            <div style={{ fontSize: '34px', fontWeight: 800, color: '#16a34a' }}>
-              {formatarNumero(melhorTransportadora?.score || 0, 2)}
+            <div style={{ width: '100%', height: 360 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={fretePorEstado}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis dataKey='uf' />
+                  <YAxis />
+                  <Tooltip formatter={(value) => formatarMoeda(Number(value || 0))} />
+                  <Bar dataKey='frete' fill='#7c3aed' radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
           <div style={cardStyle}>
-            <div style={chartTitleStyle}>Pior score atual</div>
+            <div style={chartTitleStyle}>Prazo médio por transportadora</div>
             <div style={chartSubtitleStyle}>
-              Ajuda a identificar onde está o maior custo relativo.
+              Comparativo do prazo médio de entrega entre as principais transportadoras.
             </div>
-            <div style={{ fontSize: '34px', fontWeight: 800, color: '#dc2626' }}>
-              {formatarNumero(piorTransportadora?.score || 0, 2)}
+            <div style={{ width: '100%', height: 360 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={prazoPorTransportadora}>
+                  <CartesianGrid strokeDasharray='3 3' vertical={false} />
+                  <XAxis
+                    dataKey='transportadora'
+                    interval={0}
+                    angle={-12}
+                    textAnchor='end'
+                    height={70}
+                  />
+                  <YAxis />
+                  <Tooltip formatter={(value) => `${formatarNumero(Number(value || 0), 1)} dias`} />
+                  <Bar dataKey='prazoMedio' fill='#0891b2' radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
       </div>
     </div>
   )
-}
-
-type KpiCardProps = {
-  title: string
-  value: string
-  hint: string
-  variation?: number
-  previousValue?: string
-  isLowerBetter?: boolean
-  background?: string
-}
-
-function KpiCard({
-  title,
-  value,
-  hint,
-  variation = 0,
-  previousValue = '',
-  isLowerBetter = false,
-  background = '#ffffff'
-}: KpiCardProps) {
-  const variacaoPositiva = isLowerBetter ? variation <= 0 : variation >= 0
-  const corVariacao = variacaoPositiva ? '#16a34a' : '#dc2626'
-  const simbolo = variacaoPositiva ? '↑' : '↓'
-
-  return (
-    <div
-      style={{
-        background,
-        border: '1px solid #e5e7eb',
-        borderRadius: '24px',
-        padding: '22px',
-        boxShadow: '0 14px 40px rgba(15, 23, 42, 0.08)'
-      }}
-    >
-      <div style={kpiTitleStyleGlobal}>{title}</div>
-      <div style={kpiValueStyleGlobal}>{value}</div>
-      <div style={kpiHintStyleGlobal}>{hint}</div>
-
-      <div
-        style={{
-          marginTop: '10px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          flexWrap: 'wrap'
-        }}
-      >
-        <span
-          style={{
-            fontSize: '12px',
-            fontWeight: 800,
-            color: corVariacao,
-            background: `${corVariacao}12`,
-            padding: '4px 8px',
-            borderRadius: '999px'
-          }}
-        >
-          {simbolo} {Math.abs(variation).toFixed(1)}%
-        </span>
-
-        {previousValue && (
-          <span
-            style={{
-              fontSize: '12px',
-              color: '#64748b'
-            }}
-          >
-            anterior: {previousValue}
-          </span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const kpiTitleStyleGlobal: React.CSSProperties = {
-  fontSize: '13px',
-  color: '#64748b',
-  marginBottom: '10px',
-  fontWeight: 600
-}
-
-const kpiValueStyleGlobal: React.CSSProperties = {
-  fontSize: '28px',
-  fontWeight: 800,
-  color: '#0f172a'
-}
-
-const kpiHintStyleGlobal: React.CSSProperties = {
-  fontSize: '12px',
-  color: '#94a3b8',
-  marginTop: '8px'
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '13px',
-  fontWeight: 600,
-  color: '#475569',
-  marginBottom: '6px'
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  height: '42px',
-  borderRadius: '12px',
-  border: '1px solid #dbe2ea',
-  padding: '0 12px',
-  fontSize: '14px',
-  color: '#0f172a',
-  background: '#fff',
-  outline: 'none'
-}
-
-const buttonStyle: React.CSSProperties = {
-  width: '100%',
-  height: '42px',
-  borderRadius: '12px',
-  border: 'none',
-  background: '#0f172a',
-  color: '#fff',
-  fontSize: '14px',
-  fontWeight: 700,
-  cursor: 'pointer'
-}
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '14px 12px',
-  background: '#f8fafc',
-  borderBottom: '1px solid #e5e7eb',
-  color: '#334155',
-  fontSize: '13px',
-  fontWeight: 700,
-  whiteSpace: 'nowrap'
-}
-
-const tdStyle: React.CSSProperties = {
-  padding: '14px 12px',
-  borderBottom: '1px solid #f1f5f9',
-  color: '#0f172a',
-  fontSize: '14px',
-  whiteSpace: 'nowrap'
 }
